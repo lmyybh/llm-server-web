@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# The SQLite database and its write-ahead log
+*.db
+*.db-wal
+*.db-shm
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+tsconfig.tsbuildinfo
+
+# Local artifacts
+artifacts/
+
+run.sh
+.env.example

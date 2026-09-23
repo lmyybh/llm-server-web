@@ -1,0 +1,50 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+/* Workload cards lay out their mode panels side by side only when the card
+   itself is wide enough — a container query, because the card's width depends
+   on how many cards fit the row, not on the viewport. */
+.card-panels {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+}
+
+.card-panel-divider {
+  display: none;
+}
+
+@container (min-width: 700px) {
+  .card-panels {
+    grid-template-columns: 1fr 1px 1fr;
+  }
+
+  .card-panel-divider {
+    display: block;
+  }
+}

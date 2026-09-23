@@ -1,0 +1,3 @@
+{"messages":[{"role":"user","content":"用一句话解释什么是 KV cache。"}],"max_tokens":128}
+{"messages":[{"role":"system","content":"你是一个乐于助人的助手。"},{"role":"user","content":"把下面这句话翻译成英文：今天天气很好。"}],"max_tokens":64}
+{"messages":[{"role":"user","content":"给出三个提高推理吞吐的方向，每个一句话。"}],"max_tokens":256}
