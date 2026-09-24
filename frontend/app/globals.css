@@ -65,6 +65,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .workload-add-item { display: flex; min-height: 160px; }
 .workload-add-button { min-height: 160px; flex: 1; }
 
+.report-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #e8eaed95 transparent;
+}
+
+.report-scrollbar::-webkit-scrollbar { width: 6px; }
+.report-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.report-scrollbar::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #cbd5e1;
+}
+.report-scrollbar:hover::-webkit-scrollbar-thumb { background: #94a3b8; }
+
+.dark .report-scrollbar { scrollbar-color: #c8c8cc transparent; }
+.dark .report-scrollbar::-webkit-scrollbar-thumb { background: #c8c8cc; }
+.dark .report-scrollbar:hover::-webkit-scrollbar-thumb { background: #b9b9bc; }
+
 .card-panels {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

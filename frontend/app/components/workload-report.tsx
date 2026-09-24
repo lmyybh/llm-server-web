@@ -252,7 +252,7 @@ export function WorkloadReport({ cells, name, shape }: { cells: Cell[]; name: st
           </button>
         ))}
       </div>
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-1">
+      <div ref={scrollRef} className="report-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pr-1">
         {(["concurrency", "qps"] as const).map((mode) => (
           <div key={mode} hidden={selectedMode !== mode}>
             <ModeSection mode={mode} cells={cells.filter((cell) => cell.mode === mode)} />
