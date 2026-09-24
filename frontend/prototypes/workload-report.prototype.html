@@ -1,0 +1,94 @@
+<!doctype html>
+<!-- Throwaway Workload report prototype. All figures are illustrative. No production data is read. -->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workload 总报告 · HTML 原型</title>
+  <style>
+    :root{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;color:#172438;background:#f4f7fc;font-synthesis:none}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(ellipse 700px 350px at 72% -12%,#e8f2ff,transparent),#f4f7fc}.shell{max-width:1260px;margin:0 auto;padding:31px 26px 55px}.eyebrow{color:#7e90a9;font-size:10px;font-weight:800;letter-spacing:.16em}.breadcrumb{display:flex;gap:8px;align-items:center;color:#8d9aae;font-size:11px}.breadcrumb strong{color:#425472;font-weight:650}.title-row{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-top:23px}.title-row h1{margin:4px 0 6px;font-size:27px;letter-spacing:-.04em}.subtitle{margin:0;color:#7e8da3;font-size:12px;line-height:1.6}.report-pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border:1px solid #dae6f7;border-radius:999px;background:#f9fcff;color:#4d74a8;font-size:10px;font-weight:750;white-space:nowrap}.report-pill:before{content:"";height:6px;width:6px;border-radius:50%;background:#2781da}.sample{margin-left:8px;color:#9ba8b9;font-size:10px}.topnav{display:flex;gap:7px;margin:23px 0 17px}.topnav a{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid #dce5f2;border-radius:9px;background:#fff;color:#4d6080;text-decoration:none;font-size:11px;font-weight:700;box-shadow:0 1px 3px #1e31440a}.topnav a:hover{border-color:#9fbbea;color:#245caa}.topnav b{display:grid;place-items:center;height:18px;min-width:18px;border-radius:6px;background:#eef4fc;color:#4b78b6;font-size:9px}
+    .mode{--accent:#2563c8;--accent-soft:#eff6ff;--accent-border:#d9e8fb;margin-top:16px;border:1px solid #e1e8f2;border-radius:19px;background:#fff;box-shadow:0 5px 22px #18365809;overflow:hidden}.mode.qps{--accent:#139567;--accent-soft:#edfbf4;--accent-border:#d8f1e4}.mode-head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:17px;align-items:center;padding:20px 23px;border-bottom:1px solid #eaf0f6;background:linear-gradient(90deg,var(--accent-soft),#fff 55%)}.mode-title{display:flex;align-items:center;gap:10px}.mode-mark{display:grid;place-items:center;width:31px;height:31px;border-radius:9px;background:var(--accent);color:#fff;font-size:15px;font-weight:700}.mode h2{margin:0;font-size:18px;letter-spacing:-.025em}.mode-summary{margin:5px 0 0;color:#72849c;font-size:11px;line-height:1.5}.mode-meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;justify-content:flex-end}.mode-meta span{padding:5px 8px;border:1px solid var(--accent-border);border-radius:7px;background:#fff;color:#5e728d;font-size:10px;font-variant-numeric:tabular-nums}.mode-meta strong{color:var(--accent)}.mode-body{padding:21px 23px 23px}.group-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:11px}.group-head h3{margin:0;font-size:12px;font-weight:800;letter-spacing:.01em}.group-head p{margin:0;color:#8794a8;font-size:10px}.group-head+.metric-grid{margin-bottom:22px}.metric-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.metric-card{min-width:0;border:1px solid #e5ebf3;border-radius:13px;background:#fff;box-shadow:0 1px 5px #1c345607;overflow:hidden}.metric-card:hover{border-color:#c8d9ed}.metric-top{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 13px 9px}.metric-top h4{margin:0;font-size:12px;font-weight:750}.metric-top span{color:#8c9aab;font-size:10px}.metric-card table{width:100%;border-collapse:collapse;table-layout:fixed;text-align:right;font-variant-numeric:tabular-nums}.metric-card thead{background:#f8fafd;color:#8b98aa}.metric-card th{padding:7px 8px;font-size:9px;font-weight:700;letter-spacing:.025em}.metric-card td{padding:8px 8px;border-top:1px solid #edf1f6;color:#33445d;font-size:10px}.metric-card th:first-child,.metric-card td:first-child{width:62px;text-align:left;padding-left:13px}.metric-card td:first-child{color:var(--accent);font-weight:750}.metric-card tbody tr:hover{background:#f8fbff}.mode.qps .metric-card tbody tr:hover{background:#f7fdf9}.metric-card td.missing{color:#a9b4c2}.metric-footer{padding:8px 12px;border-top:1px solid #edf1f6;color:#9aa7b6;font-size:9px}.section-divider{height:1px;margin:1px 0 20px;background:#edf1f6}.page-foot{display:flex;justify-content:space-between;gap:14px;margin-top:15px;color:#98a5b5;font-size:10px;line-height:1.6}
+    .token-card .metric-top span{color:#8c9aab}.token-pair{white-space:nowrap;color:#33445d}.e2e-card td{padding-top:8px;padding-bottom:8px}
+    .topnav{display:inline-flex;gap:4px;margin:23px 0 1px;padding:4px;border:1px solid #dce5f2;border-radius:12px;background:#edf2f9}.topnav button{display:inline-flex;align-items:center;gap:8px;padding:9px 15px;border:0;border-radius:9px;background:transparent;color:#71819a;cursor:pointer;font-family:inherit;font-size:11px;font-weight:700;white-space:nowrap}.topnav button:hover{color:#285d9f}.topnav button[aria-selected="true"]{background:#fff;color:#245caa;box-shadow:0 1px 5px #233d6019}.topnav button[data-mode="qps"][aria-selected="true"]{color:#138962}.topnav b{display:grid;place-items:center;height:18px;min-width:18px;border-radius:6px;background:#dde7f4;color:inherit;font-size:9px}.topnav button[aria-selected="true"] b{background:#ebf3ff}.topnav button[data-mode="qps"][aria-selected="true"] b{background:#e2f6eb}.mode[hidden]{display:none}
+    body{overflow:hidden}.shell{height:100dvh;display:flex;flex-direction:column;padding-bottom:22px}.topnav{flex:none;margin-bottom:14px}.report-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:1px 5px 18px 1px;scrollbar-gutter:stable}.mode{margin-top:0}.page-foot{padding-bottom:8px}
+    @media(max-width:980px){.metric-grid{grid-template-columns:1fr}.shell{max-width:750px}.mode-head{grid-template-columns:1fr}.mode-meta{justify-content:flex-start}}
+    @media(max-width:640px){.shell{padding:17px 10px 34px}.title-row{align-items:flex-start}.title-row h1{font-size:22px}.report-pill{display:none}.mode-head{padding:17px}.mode-body{padding:16px}.metric-card{overflow-x:auto}.metric-card table{min-width:515px}.group-head{display:block}.group-head p{margin-top:4px}.mode-meta span{font-size:9px}.page-foot{display:block}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <nav class="breadcrumb" aria-label="面包屑"><span>模型</span><span>/</span><span>DeepSeek-V4-Flash</span><span>/</span><span>tp4</span><span>/</span><strong>prefill-1k-128</strong></nav>
+    <div class="title-row"><div><div class="eyebrow">WORKLOAD REPORT</div><h1>prefill-1k-128 · 总报告</h1><p class="subtitle">合成数据 · 输入 1,000 tokens · 输出上限 128 tokens <span class="sample">原型示意数据</span></p></div><span class="report-pill">6 项测试已完成</span></div>
+    <div class="topnav" role="tablist" aria-label="报告分区"><button type="button" id="tab-concurrency" role="tab" data-mode="concurrency" aria-controls="concurrency" aria-selected="true" tabindex="0">并发测试 <b>01</b></button><button type="button" id="tab-qps" role="tab" data-mode="qps" aria-controls="qps" aria-selected="false" tabindex="-1">QPS 测试 <b>02</b></button></div>
+    <div class="report-scroll" id="report-scroll">
+      <section class="mode" id="concurrency" role="tabpanel" aria-labelledby="tab-concurrency"><div class="mode-head"><div><div class="mode-title"><span class="mode-mark">↗</span><h2>并发测试</h2></div><p class="mode-summary">发送端最大并发为档位值；实际并发按同时在途请求数统计。</p></div><div class="mode-meta"><span><strong>4</strong> 个档位</span><span><strong>256 / 256</strong> 请求成功</span><span>最近测于 9 月 23 日</span></div></div><div class="mode-body" id="concurrency-content"></div></section>
+      <section class="mode qps" id="qps" role="tabpanel" aria-labelledby="tab-qps" hidden><div class="mode-head"><div><div class="mode-title"><span class="mode-mark">◷</span><h2>QPS 测试</h2></div><p class="mode-summary">档位表示发送端提供的 QPS；实际并发与请求吞吐反映服务响应。</p></div><div class="mode-meta"><span><strong>4</strong> 个档位</span><span><strong>256 / 256</strong> 请求成功</span><span>最近测于 9 月 23 日</span></div></div><div class="mode-body" id="qps-content"></div></section>
+      <div class="page-foot"><span>Mean、P50、P70、P95、P99 均按每个档位分别统计。</span><span>效率指标按观测窗口统计；延迟与 Token 数按请求统计。数值仅供布局评审。</span></div>
+    </div>
+  </main>
+  <script>
+    const modes = {
+      concurrency: { levels:[4,8,16,32], values:{ qps:[1.90,3.64,6.70,10.85], inputTput:[1902.9,3638.7,6702.5,10841.2], outputTput:[243.6,465.4,855.1,1386.2], actual:[3.9,7.7,15.2,29.1], success:[100,100,100,99.8], ttft:[290,330,430,720], tpot:[15.1,15.6,17.8,24.2], e2e:[2100,2240,2680,3520], input:[1000,1000,1000,1000], output:[127.8,127.5,126.9,125.7] } },
+      qps: { levels:[2,4,8,16], values:{ qps:[1.98,3.86,7.41,12.10], inputTput:[1980.8,3862.4,7412.9,12096.6], outputTput:[252.7,493.5,948.2,1520.4], actual:[3.8,7.2,14.4,25.3], success:[100,100,99.9,98.8], ttft:[285,321,452,890], tpot:[15.0,15.4,18.2,28.3], e2e:[2070,2210,2780,4200], input:[1000,1000,1000,1000], output:[127.9,127.8,127.2,124.8] } }
+    };
+    const metrics = [
+      {group:"效率与质量", items:[
+        {key:"qps",label:"请求吞吐",unit:"req/s",spread:.15,digits:2},
+        {key:"inputTput",label:"输入吞吐",unit:"tok/s",spread:.16,digits:1},
+        {key:"outputTput",label:"输出吞吐",unit:"tok/s",spread:.17,digits:1}
+      ]},
+      {group:"延迟与 Token",items:[
+        {key:"tokens",label:"Token 用量",unit:"tokens"},
+        {key:"ttft",label:"TTFT",unit:"ms",spread:.34,digits:1},
+        {key:"tpot",label:"TPOT",unit:"ms",spread:.20,digits:1},
+        {key:"e2e",label:"E2E",unit:"ms",spread:.28,digits:1}
+      ]}
+    ];
+    function format(n,digits){return Number(n).toLocaleString("zh-CN",{minimumFractionDigits:digits,maximumFractionDigits:digits})}
+    function statistics(mean,spread,limit){
+      const xs=[mean,mean*(1-spread*.55),mean*(1+spread*.1),mean*(1+spread*.85),mean*(1+spread*1.25)];
+      return limit ? xs.map(x=>Math.min(limit,x)) : xs;
+    }
+    function card(mode,metric){
+      const data=modes[mode]; const levels=data.levels; const values=data.values[metric.key];
+      const rows=levels.map((level,i)=>{
+        const cells=statistics(values[i],metric.spread,metric.key==="success"?100:metric.key==="actual"&&mode==="concurrency"?level:undefined);
+        return '<tr><td>'+level+'</td>'+cells.map(value=>'<td>'+format(value,metric.digits)+'</td>').join('')+'</tr>';
+      }).join('');
+      return '<article class="metric-card '+(metric.key==="e2e"?"e2e-card":"")+'"><div class="metric-top"><h4>'+metric.label+'</h4><span>'+metric.unit+'</span></div><table><thead><tr><th>'+(mode==="qps"?"QPS":"并发")+'</th><th>Mean</th><th>P50</th><th>P70</th><th>P95</th><th>P99</th></tr></thead><tbody>'+rows+'</tbody></table><div class="metric-footer">'+(metric.group==="效率与质量"?"每 1 秒观测窗口":"每个成功请求")+' · 按档位汇总</div></article>';
+    }
+    function overviewCard(mode){
+      const data=modes[mode];
+      const rows=data.levels.map((level,i)=>'<tr><td>'+level+'</td><td>'+format(data.values.actual[i],1)+'</td><td>'+format(data.values.success[i],1)+'%</td></tr>').join('');
+      return '<article class="metric-card overview-card"><div class="metric-top"><h4>运行概览</h4><span>按档位汇总</span></div><table><thead><tr><th>'+(mode==="qps"?"QPS":"并发")+'</th><th>实际并发</th><th>成功率</th></tr></thead><tbody>'+rows+'</tbody></table><div class="metric-footer">实际并发为同时在途请求数；成功率为成功请求占比</div></article>';
+    }
+    function tokenCard(mode){
+      const data=modes[mode];
+      const rows=data.levels.map((level,i)=>{
+        const input=statistics(data.values.input[i],0);
+        const output=statistics(data.values.output[i],.025);
+        return '<tr><td>'+level+'</td>'+input.map((value,j)=>'<td><span class="token-pair">'+Math.round(value)+'/'+Math.round(output[j])+'</span></td>').join('')+'</tr>';
+      }).join('');
+      return '<article class="metric-card token-card"><div class="metric-top"><h4>Token 用量</h4><span>输入 / 输出 · tokens</span></div><table><thead><tr><th>'+(mode==="qps"?"QPS":"并发")+'</th><th>Mean</th><th>P50</th><th>P70</th><th>P95</th><th>P99</th></tr></thead><tbody>'+rows+'</tbody></table><div class="metric-footer">每格以 Input tokens / Output tokens 展示</div></article>';
+    }
+    for(const mode of Object.keys(modes)){
+      document.getElementById(mode+'-content').innerHTML=metrics.map((group,i)=>'<div class="group-head"><h3>'+group.group+'</h3><p>'+(i===0?"吞吐量按观测窗口统计，实际并发与成功率按档位汇总":"每个档位独立呈现请求分布")+'</p></div><div class="metric-grid">'+(i===0?overviewCard(mode):'')+group.items.map(metric=>metric.key==="tokens"?tokenCard(mode):card(mode,{...metric,group:group.group})).join('')+'</div>'+(i===0?'<div class="section-divider"></div>':'')).join('');
+    }
+    const tabs=[...document.querySelectorAll('[role="tab"]')];
+    function activateMode(mode){
+      for(const tab of tabs){const active=tab.dataset.mode===mode;tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1;document.getElementById(tab.dataset.mode).hidden=!active;}
+      document.getElementById('report-scroll').scrollTop=0;
+    }
+    for(const tab of tabs){
+      tab.addEventListener('click',()=>activateMode(tab.dataset.mode));
+      tab.addEventListener('keydown',event=>{
+        if(event.key!=='ArrowLeft'&&event.key!=='ArrowRight')return;
+        event.preventDefault();
+        const next=tabs[(tabs.indexOf(tab)+(event.key==='ArrowRight'?1:tabs.length-1))%tabs.length];
+        activateMode(next.dataset.mode);next.focus();
+      });
+    }
+  </script>
+</body>
+</html>

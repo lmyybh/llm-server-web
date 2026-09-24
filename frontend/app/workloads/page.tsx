@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { workloadShape } from "../components/cell";
-import { Button, Empty, ErrorBanner, Surface, TextInput } from "../components/ui";
+import { Button, Empty, ErrorBanner, Modal, Surface, TextInput } from "../components/ui";
 import { WorkloadForm } from "../components/workload-form";
 import {
   api,
@@ -16,6 +16,9 @@ export default function WorkloadsPage() {
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState<Workload | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -31,20 +34,24 @@ export default function WorkloadsPage() {
   }, [refresh]);
 
   async function remove(workload: Workload) {
-    setError(null);
+    setBusy(true);
+    setDeleteError(null);
     try {
       await api.deleteWorkload(workload.id);
+      setDeleting(null);
       await refresh();
     } catch (caught) {
-      setError(describe(caught));
+      setDeleteError(describe(caught));
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-lg font-semibold">负载库</h1>
-        <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">负载库</h1>
+        <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500 dark:text-neutral-400">
           预置的负载形状。压测参数不属于这里——并发、QPS、请求数都在部署方式下按 Cell 配置。
         </p>
       </div>
@@ -52,7 +59,7 @@ export default function WorkloadsPage() {
       <ErrorBanner message={error} />
 
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold">全部负载</h2>
+        <h2 className="text-sm font-semibold text-slate-700">全部负载 <span className="ml-1 font-normal text-slate-400">{workloads?.length ?? ""}</span></h2>
         {creating ? null : <Button onClick={() => setCreating(true)}>新建负载</Button>}
       </div>
 
@@ -79,7 +86,7 @@ export default function WorkloadsPage() {
         ) : (
           <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
             {workloads.map((workload) => (
-              <li key={workload.id} className="flex items-center justify-between gap-4 px-4 py-3">
+            <li key={workload.id} className="flex items-center justify-between gap-4 px-5 py-4 transition-colors hover:bg-slate-50/80">
                 <div className="flex min-w-0 flex-1 flex-col gap-1">
                   {editingId === workload.id ? (
                     <RenameForm
@@ -113,7 +120,7 @@ export default function WorkloadsPage() {
                     <Button variant="ghost" onClick={() => setEditingId(workload.id)}>
                       编辑
                     </Button>
-                    <Button variant="danger" onClick={() => void remove(workload)}>
+                    <Button variant="danger" onClick={() => { setDeleteError(null); setDeleting(workload); }}>
                       删除
                     </Button>
                   </div>
@@ -123,6 +130,24 @@ export default function WorkloadsPage() {
           </ul>
         )}
       </Surface>
+      {deleting ? (
+        <Modal
+          title={`删除 ${deleting.name}`}
+          className="max-w-md"
+          onClose={() => { if (!busy) setDeleting(null); }}
+        >
+          <div className="flex flex-col gap-4">
+            <p className="text-sm text-neutral-600 dark:text-neutral-300">
+              确认从负载库删除此负载？已被部署方式或测试项引用的负载需要先移除引用。
+            </p>
+            <ErrorBanner message={deleteError} />
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" disabled={busy} onClick={() => setDeleting(null)}>取消</Button>
+              <Button variant="danger" disabled={busy} onClick={() => void remove(deleting)}>确认删除</Button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
     </div>
   );
 }

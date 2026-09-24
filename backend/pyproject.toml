@@ -5,7 +5,9 @@ description = "Load generation and measurement kernel for the LLM serving bench 
 requires-python = ">=3.12"
 dependencies = [
     "aiohttp>=3.9",
+    "fastapi>=0.115",
     "numpy>=1.26",
+    "uvicorn[standard]>=0.30",
 ]
 
 [project.optional-dependencies]

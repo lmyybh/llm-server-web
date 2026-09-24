@@ -3,48 +3,160 @@
 @tailwind utilities;
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: light;
+  --background: #f4f7fb;
+  --foreground: #172033;
+  --muted: #68758b;
+  --line: #e3e9f1;
+  --accent: #2563eb;
+  --accent-soft: #eff6ff;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+* { box-sizing: border-box; }
+
+html { height: 100%; overflow: hidden; background: var(--background); }
 
 body {
+  height: 100dvh;
+  overflow: hidden;
   color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+  background:
+    radial-gradient(ellipse at 72% -15%, rgba(191, 219, 254, .34), transparent 38rem),
+    var(--background);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection { color: #153e75; background: #dbeafe; }
+
+button, input, textarea, select { font: inherit; }
+
+button, a { -webkit-tap-highlight-color: transparent; }
+
+a { text-decoration-thickness: 1px; text-underline-offset: 3px; }
+
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+  outline: 3px solid rgba(59, 130, 246, .34);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
+  button, a { transition-duration: 160ms; }
 }
 
 @layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
+  .text-balance { text-wrap: balance; }
 }
 
-/* Workload cards lay out their mode panels side by side only when the card
-   itself is wide enough — a container query, because the card's width depends
-   on how many cards fit the row, not on the viewport. */
+.workload-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr));
+  align-items: stretch;
+  gap: 1rem;
+}
+
+.workload-card,
+.workload-add-item {
+  width: 100%;
+  min-width: 0;
+}
+
+.workload-add-item { display: flex; min-height: 160px; }
+.workload-add-button { min-height: 160px; flex: 1; }
+
 .card-panels {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 1.5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 0.625rem;
 }
 
-.card-panel-divider {
-  display: none;
+.card-mode-panel {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid #e8edf4;
+  border-radius: 0.95rem;
+  background: linear-gradient(180deg, #fbfcfe, #fff 72%);
 }
 
-@container (min-width: 700px) {
-  .card-panels {
-    grid-template-columns: 1fr 1px 1fr;
-  }
+.cell-row-grid {
+  --cell-level-width: 28px;
+  --cell-requests-width: 60px;
+  --cell-actions-width: 44px;
+  --cell-column-gap: 0.375rem;
+  display: grid;
+  grid-template-columns: var(--cell-level-width) var(--cell-requests-width) minmax(0, 1fr) var(--cell-actions-width);
+  align-items: center;
+  gap: var(--cell-column-gap);
+}
 
-  .card-panel-divider {
-    display: block;
+.cell-row-content {
+  display: grid;
+  grid-template-columns: var(--cell-level-width) var(--cell-requests-width) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--cell-column-gap);
+}
+
+.cell-row-level,
+.cell-row-requests,
+.cell-row-actions {
+  display: flex;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+}
+
+.cell-row-status {
+  display: flex;
+  height: 26px;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.cell-row-status > span:first-child {
+  flex: 0 0 48px;
+  justify-content: center;
+}
+.cell-row-progress-label { flex: 0 0 20px; overflow: hidden; text-overflow: ellipsis; }
+.cell-row-progress-track { pointer-events: none; }
+
+.cell-row-actions {
+  align-self: center;
+}
+
+.cell-row-actions > button,
+.cell-row-actions > div > button[aria-label] { padding: 0.25rem; }
+
+@container (max-width: 560px) {
+  .card-mode-panel { padding: 0.625rem; }
+  .card-mode-panel > div:first-child { flex-wrap: wrap; }
+  .cell-row-grid {
+    --cell-level-width: 26px;
+    --cell-requests-width: 54px;
+    --cell-actions-width: 40px;
+    --cell-column-gap: 0.25rem;
+    padding-inline: 0.375rem;
   }
+  .cell-row-grid > div > button,
+  .cell-row-grid > div > div > button[aria-label] { padding: 0.25rem; }
+}
+
+@container (max-width: 420px) {
+  .cell-row-grid {
+    --cell-level-width: 24px;
+    --cell-requests-width: 48px;
+    --cell-actions-width: 38px;
+    padding-inline: 0.25rem;
+  }
+  .cell-row-status > span:first-child { flex-basis: 12px; gap: 0; font-size: 0; }
+  .cell-row-progress-label { display: none; }
+}
+
+@media (max-width: 720px) {
+  main { padding: 1.25rem !important; }
 }

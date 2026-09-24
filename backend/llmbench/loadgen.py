@@ -9,6 +9,7 @@ waiting for a concurrency slot is excluded from TTFT and E2E — the numbers are
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -90,6 +91,9 @@ class LevelResult:
     duration_seconds: float
     request_rate: float | None = None
     observations: list[RequestObservation] = field(default_factory=list)
+    # Successful completions, measured from the start of this level. Used to
+    # describe variation in throughput across one-second observation windows.
+    completion_events: list[tuple[float, int, int]] = field(default_factory=list)
 
     @property
     def achieved_qps(self) -> float:
@@ -120,6 +124,18 @@ class LevelResult:
         total = sum(o.prompt_tokens or 0 for o in self.observations if o.success)
         return total / self.duration_seconds
 
+    @property
+    def actual_concurrency(self) -> float | None:
+        """Time-averaged requests in flight, from measured service intervals.
+
+        Each observation's E2E interval begins after the sending-side semaphore
+        is acquired. Summing their lengths and dividing by wall time gives the
+        area under the in-flight count, including failed requests.
+        """
+        if self.duration_seconds <= 0 or not self.observations:
+            return None
+        return sum(o.e2e_ms for o in self.observations) / (1000 * self.duration_seconds)
+
     def _values(self, attribute: str) -> list[float]:
         values = (getattr(o, attribute) for o in self.observations if o.success)
         return [v for v in values if v is not None]
@@ -134,9 +150,11 @@ class LevelResult:
         return _histogram(self._values("e2e_ms"), E2E_BUCKETS_MS)
 
     def summaries(self) -> dict[str, dict[str, float | None]]:
-        return {
+        summaries = {
             name: {
+                "mean": sum(values) / len(values) if values else None,
                 "p50": percentile(values, 50),
+                "p70": percentile(values, 70),
                 "p95": percentile(values, 95),
                 "p99": percentile(values, 99),
             }
@@ -144,8 +162,41 @@ class LevelResult:
                 ("ttft_ms", self._values("ttft_ms")),
                 ("tpot_ms", self._values("tpot_ms")),
                 ("e2e_ms", self._values("e2e_ms")),
+                ("input_tokens", self._values("prompt_tokens")),
+                ("output_tokens", self._values("completion_tokens")),
             )
         }
+        windows: dict[str, list[float]] = {
+            "request_throughput": [],
+            "input_token_throughput": [],
+            "output_token_throughput": [],
+        }
+        if self.completion_events and self.duration_seconds > 0:
+            count = max(1, math.ceil(self.duration_seconds))
+            buckets = [[0.0, 0.0, 0.0] for _ in range(count)]
+            for elapsed, input_tokens, output_tokens in self.completion_events:
+                bucket = buckets[min(int(elapsed), count - 1)]
+                bucket[0] += 1
+                bucket[1] += input_tokens
+                bucket[2] += output_tokens
+            for index, bucket in enumerate(buckets):
+                width = min(1.0, self.duration_seconds - index)
+                for key, value in zip(windows, bucket):
+                    windows[key].append(value / width)
+        for key, values in windows.items():
+            mean = {
+                "request_throughput": self.achieved_qps,
+                "input_token_throughput": self.input_token_throughput,
+                "output_token_throughput": self.output_token_throughput,
+            }[key]
+            summaries[key] = {
+                "mean": mean,
+                "p50": percentile(values, 50),
+                "p70": percentile(values, 70),
+                "p95": percentile(values, 95),
+                "p99": percentile(values, 99),
+            }
+        return summaries
 
     def finish_reasons(self) -> dict[str, int]:
         counts: dict[str, int] = {}
@@ -372,9 +423,16 @@ async def run_level(
     connector = aiohttp.TCPConnector(limit=in_flight, limit_per_host=in_flight)
     timeout = aiohttp.ClientTimeout(total=timeout_seconds)
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        completion_events: list[tuple[float, int, int]] = []
 
         async def tracked(body: dict) -> RequestObservation:
             observation = await _one_request(session, url, body, semaphore, headers)
+            if observation.success:
+                completion_events.append((
+                    time.perf_counter() - started,
+                    observation.prompt_tokens or 0,
+                    observation.completion_tokens or 0,
+                ))
             if request_callback is not None:
                 request_callback()
             return observation
@@ -397,6 +455,7 @@ async def run_level(
         duration_seconds=duration_seconds,
         request_rate=request_rate,
         observations=observations,
+        completion_events=completion_events,
     )
 
 

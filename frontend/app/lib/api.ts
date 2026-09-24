@@ -178,8 +178,15 @@ export type Cell = {
   /** Set only for open-loop (qps) Cells, where the level *is* an offered rate. */
   offered_qps: number | null;
   achieved_qps: number | null;
+  /** Time-averaged requests actually in flight during the measured run. */
+  actual_concurrency: number | null;
   input_token_throughput: number | null;
   output_token_throughput: number | null;
+  metric_summaries: Partial<Record<
+    "ttft_ms" | "tpot_ms" | "e2e_ms" | "input_tokens" | "output_tokens" |
+    "request_throughput" | "input_token_throughput" | "output_token_throughput",
+    { mean: number | null; p50: number | null; p70: number | null; p95: number | null; p99: number | null }
+  >> | null;
   ttft_p50: number | null;
   ttft_p95: number | null;
   ttft_p99: number | null;

@@ -34,18 +34,21 @@
 ## 运行
 
 ```bash
-cd frontend && npm install    # 首次
+python3 -m venv .venv          # 首次安装后端依赖
+source .venv/bin/activate
+python -m pip install -e ./backend
+cd frontend && npm install    # 首次安装前端依赖
 cd .. && ./run.sh             # dev，两端都带热重载
 ./run.sh prod                 # 构建前端后以生产模式运行
 ```
 
 `run.sh` 同时起后端与前端，Ctrl-C 会一起收掉。配置项见 [`.env.example`](./.env.example)。
 
-**后端只监听回环地址**：浏览器从不直接访问它。Next 在服务端把 `/api/*` 转发到 `BACKEND_URL`（默认 `http://127.0.0.1:8000`），所以：
+**后端只监听回环地址**：浏览器从不直接访问它。Next 在服务端把 `/api/*` 转发到 `BACKEND_URL`（默认 `http://127.0.0.1:43210`），所以：
 
 - 浏览器全程同源，**CORS 在部署形态下根本不参与**
 - 后端不需要额外的网关路由，也不需要暴露端口
-- 直接 `curl :8000` 仍然可用（对拍工具与脚本走这条路）
+- 直接 `curl :43210` 仍然可用（对拍工具与脚本走这条路）
 
 ### 停服务
 
@@ -60,7 +63,7 @@ kill -TERM "$(pgrep -f '[r]un\.sh dev' | head -1)"
 如果 `run.sh` 已经不在（比如被 `kill -9`），按端口定位。**这台机器上没有 `lsof` 也没有 `fuser`**，`ss` 是有的：
 
 ```bash
-for p in 6006 8000; do
+for p in 6006 43210; do
   for pid in $(ss -lntpH | grep -E ":$p\b" | grep -oP 'pid=\K[0-9]+' | sort -u); do kill "$pid"; done
 done
 ```

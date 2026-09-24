@@ -46,8 +46,8 @@ export default function ServicesPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="text-lg font-semibold">服务</h1>
-        <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+        <h1 className="text-2xl font-bold tracking-tight text-slate-900">服务巡检</h1>
+        <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500 dark:text-neutral-400">
           巡检的对象。与压测的模型 / 部署方式是两套独立的记录——巡检关心的是&quot;这个服务现在还正常吗&quot;，
           与它服务哪个模型无关。
         </p>
@@ -86,10 +86,10 @@ export default function ServicesPage() {
         ) : (
           <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
             {services.map((service) => (
-              <li key={service.id}>
+          <li key={service.id} className="border-b border-slate-100 last:border-0">
                 <Link
                   href={`/services/${service.id}`}
-                  className="flex items-center justify-between gap-4 px-4 py-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/50"
+                  className="flex items-center justify-between gap-4 px-5 py-4 transition-colors hover:bg-blue-50/50 dark:hover:bg-neutral-800/50"
                 >
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate text-sm font-medium">{service.name}</span>

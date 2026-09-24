@@ -13,7 +13,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS model (
@@ -91,8 +91,10 @@ CREATE TABLE IF NOT EXISTS cell (
     duration_seconds        REAL,
     offered_qps             REAL,
     achieved_qps            REAL,
+    actual_concurrency      REAL,
     input_token_throughput  REAL,
     output_token_throughput REAL,
+    metric_summaries_json   TEXT,
     ttft_p50                REAL,
     ttft_p95                REAL,
     ttft_p99                REAL,
@@ -189,8 +191,10 @@ CELL_RESULT_FIELDS = (
     "duration_seconds",
     "offered_qps",
     "achieved_qps",
+    "actual_concurrency",
     "input_token_throughput",
     "output_token_throughput",
+    "metric_summaries_json",
     "ttft_p50",
     "ttft_p95",
     "ttft_p99",
@@ -290,6 +294,15 @@ def init_db(connection: sqlite3.Connection) -> None:
         if "defaults_json" in model_columns:
             connection.execute("ALTER TABLE model DROP COLUMN defaults_json")
     connection.executescript(SCHEMA)
+    # Existing v6 databases keep their Cell results; newly measured runs fill
+    # these columns while older runs simply report them as unavailable.
+    if 0 < current_version < 7:
+        cell_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(cell)").fetchall()
+        }
+        for column, kind in (("actual_concurrency", "REAL"), ("metric_summaries_json", "TEXT")):
+            if column not in cell_columns:
+                connection.execute(f"ALTER TABLE cell ADD COLUMN {column} {kind}")
     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
@@ -620,6 +633,7 @@ def _ensure_attachment(connection: sqlite3.Connection, deployment_id: int, workl
 _CELL_JSON_FIELDS = (
     ("progress_json", "progress"),
     ("executed_snapshot_json", "executed_snapshot"),
+    ("metric_summaries_json", "metric_summaries"),
     ("ttft_histogram_json", "ttft_histogram"),
     ("tpot_histogram_json", "tpot_histogram"),
     ("e2e_histogram_json", "e2e_histogram"),

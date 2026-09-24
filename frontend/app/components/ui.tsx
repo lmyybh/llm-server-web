@@ -9,11 +9,13 @@ import Link from "./Link";
 export function IconButton({
   label,
   danger = false,
+  tone,
   onClick,
   children,
 }: {
   label: string;
   danger?: boolean;
+  tone?: "blue" | "red";
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -24,9 +26,13 @@ export function IconButton({
       title={label}
       onClick={onClick}
       className={
-        "rounded-md p-1 transition-colors " +
+        "rounded-lg p-1.5 transition-colors " +
         "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 " +
-        (danger
+        (tone === "blue"
+          ? "text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:text-blue-400 dark:hover:bg-blue-950"
+          : tone === "red"
+          ? "text-red-600 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950"
+          : danger
           ? "text-neutral-400 hover:bg-red-50 hover:text-red-600 dark:text-neutral-500 dark:hover:bg-red-950 dark:hover:text-red-400"
           : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-200")
       }
@@ -37,12 +43,12 @@ export function IconButton({
 }
 
 const INPUT =
-  "rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm outline-none " +
-  "placeholder:text-neutral-400 focus:border-neutral-900 disabled:opacity-50 " +
-  "dark:border-neutral-700 dark:bg-neutral-900 dark:focus:border-neutral-100";
+  "rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm shadow-slate-900/[.025] outline-none " +
+  "placeholder:text-slate-400 focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10 disabled:opacity-50 " +
+  "dark:border-neutral-700 dark:bg-neutral-900 dark:focus:border-blue-400";
 
 const SURFACE =
-  "rounded-lg border border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900";
+  "rounded-2xl border border-slate-200/90 bg-white shadow-sm shadow-slate-900/[.035] dark:border-neutral-800 dark:bg-neutral-900";
 
 export function Field({
   label,
@@ -73,9 +79,9 @@ export function Button({
 }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "primary" | "ghost" | "danger" }) {
   const palette = {
     primary:
-      "bg-neutral-900 text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300",
+      "bg-blue-600 text-white shadow-sm shadow-blue-700/20 hover:bg-blue-700 active:bg-blue-800 dark:bg-blue-500 dark:text-white dark:hover:bg-blue-400",
     ghost:
-      "border border-neutral-300 text-neutral-700 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800",
+      "border border-slate-200 bg-white text-slate-700 shadow-sm hover:bg-slate-50 hover:text-slate-900 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-300 dark:hover:bg-neutral-800",
     danger:
       "border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950",
   }[variant];
@@ -83,7 +89,7 @@ export function Button({
     <button
       {...props}
       className={
-        "rounded-md px-3 py-2 text-sm font-medium transition-colors " +
+        "rounded-xl px-4 py-2.5 text-sm font-semibold transition-all " +
         "disabled:cursor-not-allowed disabled:opacity-50 " +
         `${palette} ${className}`
       }
@@ -96,7 +102,7 @@ export function ErrorBanner({ message }: { message: string | null }) {
   return (
     <div
       role="alert"
-      className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
+      className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-300"
     >
       {message}
     </div>
@@ -130,12 +136,12 @@ export function Breadcrumb({ items }: { items: { label: string; href?: string }[
           {item.href ? (
             <Link
               href={item.href}
-              className="hover:text-neutral-700 hover:underline dark:hover:text-neutral-200"
+              className="font-medium text-slate-500 hover:text-blue-700 hover:underline dark:hover:text-neutral-200"
             >
               {item.label}
             </Link>
           ) : (
-            <span aria-current="page" className="text-neutral-600 dark:text-neutral-300">
+            <span aria-current="page" className="font-medium text-slate-700 dark:text-neutral-300">
               {item.label}
             </span>
           )}
@@ -179,7 +185,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`relative w-full max-w-2xl rounded-xl border border-neutral-200 bg-white p-5 shadow-xl dark:border-neutral-700 dark:bg-neutral-900 ${className}`}
+        className={`relative w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl shadow-slate-900/15 dark:border-neutral-700 dark:bg-neutral-900 ${className}`}
       >
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="text-sm font-semibold">{title}</h2>

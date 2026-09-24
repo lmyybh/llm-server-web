@@ -88,14 +88,23 @@ export default function ModelsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <Breadcrumb items={[{ label: "模型" }]} />
+      <div className="flex flex-col gap-2">
+        <Breadcrumb items={[{ label: "压测" }, { label: "模型" }]} />
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900">模型压测</h1>
+            <p className="mt-1 text-sm text-slate-500">管理模型与部署方式，快速查看推理性能表现。</p>
+          </div>
+          <span className="rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-700">性能工作区</span>
+        </div>
+      </div>
 
       <ErrorBanner message={error} />
 
       {models === null ? (
         <Empty>加载中…</Empty>
       ) : (
-        <ul className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4">
+        <ul className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-5">
           {models.map((model) => (
             <li key={model.id}>
               <ModelCard
@@ -239,7 +248,7 @@ function ModelCard({
   onDelete: () => void;
 }) {
   return (
-    <div className="group relative flex h-full flex-col gap-3 rounded-xl border border-neutral-200 bg-white p-5 transition-all hover:-translate-y-0.5 hover:border-neutral-300 hover:shadow-lg hover:shadow-neutral-200/60 dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-600 dark:hover:shadow-black/40">
+    <div className="group relative flex h-full flex-col gap-3 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm shadow-slate-900/[.035] transition-all hover:-translate-y-1 hover:border-blue-200 hover:shadow-xl hover:shadow-blue-900/[.08] dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-600 dark:hover:shadow-black/40">
       <div className="flex items-start justify-between gap-2">
         <h2 className="truncate text-sm font-semibold">
           <Link

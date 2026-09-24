@@ -64,7 +64,11 @@ const STATUS_DOT_COLORS: Record<CellStatus, string> = {
  * The status column of a cell row: a small dot plus quiet text. Cheaper to
  * scan than the pill badge, which is reserved for inspection pages.
  */
-export function CellStatusDot({ status }: { status: CellStatus }) {
+export function CellStatusDot({ status, phase }: { status: CellStatus; phase?: string }) {
+  const label =
+    status === "running" && (phase === "预热" || phase === "warmup")
+      ? "预热中"
+      : STATUS_LABELS[status];
   return (
     <span className="flex items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-300">
       <span
@@ -73,7 +77,7 @@ export function CellStatusDot({ status }: { status: CellStatus }) {
           status === "running" ? "animate-pulse" : ""
         }`}
       />
-      {STATUS_LABELS[status]}
+      {label}
     </span>
   );
 }
@@ -139,7 +143,7 @@ export function CellSummary({ cell }: { cell: Cell }) {
         label="档位"
         value={cell.mode === "qps" ? `QPS ${cell.level}` : `并发 ${cell.level}`}
       />
-      <Stat label="请求" value={`${succeeded}/${total}`} />
+      <Stat label="成功请求" value={`${succeeded}/${total}`} />
       <Stat
         label="成功率"
         value={total === 0 ? "—" : `${((succeeded / total) * 100).toFixed(1)}%`}
@@ -157,8 +161,11 @@ export function CellSummary({ cell }: { cell: Cell }) {
         value={
           cell.finish_reasons
             ? Object.entries(cell.finish_reasons)
-                .map(([reason, count]) => `${reason}×${count}`)
-                .join(" ")
+                .map(([reason, count]) => {
+                  const label = reason === "length" ? "达到长度上限" : reason === "stop" ? "正常停止" : reason === "tool_calls" ? "工具调用" : reason;
+                  return `${label}：${count} 次`;
+                })
+                .join(" · ")
             : "—"
         }
       />
@@ -206,11 +213,15 @@ export function CellCurves({ cells, mode }: { cells: Cell[]; mode: string }) {
   const measured = cells.filter((cell) => cell.status === "completed" && cell.last_run_at);
   if (measured.length === 0) return null;
   const xLabel = mode === "qps" ? "提供的 QPS" : "并发";
+  const rates = measured.map(successRate).filter((rate): rate is number => rate !== null);
+  const curves = rates.length > 0 && rates.every((rate) => rate === rates[0])
+    ? CURVES.filter((curve) => curve.title !== "成功率")
+    : CURVES;
 
   return (
     <section aria-label="指标曲线" className="flex flex-col gap-2">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {CURVES.map((curve) => (
+        {curves.map((curve) => (
           <LineChart
             key={curve.title}
             title={curve.title}
@@ -242,7 +253,7 @@ export function CellCurves({ cells, mode }: { cells: Cell[]; mode: string }) {
 export function CellHistograms({ cell }: { cell: Cell }) {
   if (!cell.ttft_histogram && !cell.tpot_histogram && !cell.e2e_histogram) return null;
   return (
-    <div className="grid gap-4 sm:grid-cols-3">
+    <div className="grid gap-4 md:grid-cols-3">
       <HistogramBars title="TTFT 分布" buckets={cell.ttft_histogram} unit="ms" />
       <HistogramBars title="TPOT 分布" buckets={cell.tpot_histogram} unit="ms" />
       <HistogramBars title="E2E 分布" buckets={cell.e2e_histogram} unit="ms" />
@@ -271,15 +282,17 @@ export function HistogramBars({
       </h4>
       <ul className="flex flex-col gap-0.5">
         {entries.map(([label, count]) => (
-          <li key={label} className="flex items-center gap-2 text-xs">
-            <span className="w-24 shrink-0 font-mono text-neutral-500 dark:text-neutral-400">
+          <li key={label} className="grid grid-cols-[minmax(0,5rem)_minmax(0,1fr)_2rem] items-center gap-2 text-xs">
+            <span className="min-w-0 truncate font-mono text-neutral-500 dark:text-neutral-400" title={label}>
               {label}
             </span>
-            <span
-              className="h-3 shrink-0 rounded-sm bg-neutral-400 dark:bg-neutral-600"
-              style={{ width: `${Math.max(2, (count / peak) * 100)}%`, maxWidth: "60%" }}
-            />
-            <span className="font-mono text-neutral-500 dark:text-neutral-400">{count}</span>
+            <span className="h-3 min-w-0 overflow-hidden rounded-sm bg-neutral-100 dark:bg-neutral-800">
+              <span
+                className="block h-full rounded-sm bg-neutral-400 dark:bg-neutral-600"
+                style={{ width: `${Math.max(2, (count / peak) * 100)}%` }}
+              />
+            </span>
+            <span className="text-right font-mono tabular-nums text-neutral-500 dark:text-neutral-400">{count}</span>
           </li>
         ))}
       </ul>

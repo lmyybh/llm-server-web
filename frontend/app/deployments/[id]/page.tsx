@@ -1,26 +1,23 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
-  CellCurves,
-  CellHistograms,
-  CellLatencyTable,
-  CellProgress,
   CellStatusDot,
-  CellSummary,
   MODE_LABELS,
+  format,
   relativeTime,
   workloadShape,
 } from "../../components/cell";
+import { CellReport } from "../../components/cell-report";
+import { WorkloadReport } from "../../components/workload-report";
 import { Breadcrumb, Button, Empty, ErrorBanner, Field, IconButton, Modal, TextInput } from "../../components/ui";
-import { EllipsisIcon, PlayIcon, RotateCcwIcon, StopIcon } from "../../components/icons";
+import { EllipsisIcon, PlayIcon, ReportIcon, RotateCcwIcon, StopIcon, TrashIcon } from "../../components/icons";
 import { WorkloadForm } from "../../components/workload-form";
 import { parseLevels } from "../../lib/levels";
 import {
   api,
-  artifactsZipUrl,
   describe,
   type Cell,
   type CellMode,
@@ -54,6 +51,7 @@ export default function DeploymentPage() {
   /** null = closed. Cells are only ever configured against an added workload. */
   const [cellForm, setCellForm] = useState<{
     workloadId: number;
+    mode?: CellMode;
     initial?: { mode: CellMode; levels: string; requests: string };
   } | null>(null);
   const [addingWorkload, setAddingWorkload] = useState(false);
@@ -134,13 +132,30 @@ export default function DeploymentPage() {
       {cells === null ? (
         <Empty>加载中…</Empty>
       ) : (
-        <ul className="grid w-full grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+        <ul className="workload-grid">
           {groups.map((group) => (
             <WorkloadCard
               key={group.workloadId}
               group={group}
-              onNewCell={() => setCellForm({ workloadId: group.workloadId })}
-              onDetach={() => void act(() => api.detachWorkload(deploymentId, group.workloadId), "已移除负载")}
+              onNewCell={(mode) => setCellForm({ workloadId: group.workloadId, mode })}
+              onDetach={async () => {
+                try {
+                  for (const cell of group.cells) {
+                    if (cell.status === "queued" || cell.status === "running") {
+                      try {
+                        await api.cancelCell(cell.id);
+                      } catch {
+                        // The run may have finished between refresh and confirmation.
+                      }
+                    }
+                    await api.deleteCell(cell.id);
+                  }
+                  await api.detachWorkload(deploymentId, group.workloadId);
+                } finally {
+                  await refresh();
+                }
+                setToast("已从当前部署删除负载及其测试项");
+              }}
               onAction={act}
               onDuplicate={(cell) =>
                 setCellForm({
@@ -154,12 +169,12 @@ export default function DeploymentPage() {
               }
             />
           ))}
-          <li>
+          <li className="workload-add-item">
             <button
               type="button"
               onClick={() => setAddingWorkload(true)}
               disabled={attached === null}
-              className="flex h-full min-h-40 w-full flex-col items-center justify-center gap-2 rounded-[18px] border-2 border-dashed border-neutral-300 text-neutral-400 transition-colors hover:border-neutral-400 hover:text-neutral-600 disabled:opacity-50 dark:border-neutral-700 dark:hover:border-neutral-500 dark:hover:text-neutral-300"
+              className="workload-add-button flex w-full flex-col items-center justify-center gap-2 rounded-[18px] border-2 border-dashed border-neutral-300 px-4 text-neutral-400 transition-colors hover:border-neutral-400 hover:text-neutral-600 disabled:opacity-50 dark:border-neutral-700 dark:hover:border-neutral-500 dark:hover:text-neutral-300"
             >
               <span aria-hidden className="text-2xl leading-none">＋</span>
               <span className="text-sm font-medium">添加负载</span>
@@ -186,10 +201,15 @@ export default function DeploymentPage() {
       ) : null}
 
       {cellForm !== null && cells !== null ? (
-        <Modal title="添加测试" className="max-w-2xl" onClose={() => setCellForm(null)}>
+        <Modal
+          title={cellForm.mode ? ADD_PANEL_TITLES[cellForm.mode] : "添加测试"}
+          className="max-w-md"
+          onClose={() => setCellForm(null)}
+        >
           <CellLadderForm
             deploymentId={deploymentId}
             workloadId={cellForm.workloadId}
+            fixedMode={cellForm.mode}
             initial={cellForm.initial}
             existingLevels={{
               concurrency: cells
@@ -392,7 +412,7 @@ function AddWorkloadForm({
   return (
     <div className="flex flex-col gap-3">
       <ErrorBanner message={error} />
-      <Field label="负载" hint="压测配置在添加后从卡片上的「新建 Cell」设置。">
+      <Field label="负载" hint="添加后，在并发测试或 QPS 测试面板中配置。">
         <select
           aria-label="负载"
           className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900"
@@ -432,6 +452,7 @@ function CellLadderForm({
   deploymentId,
   workloadId,
   existingLevels,
+  fixedMode,
   initial,
   onCreated,
 }: {
@@ -439,11 +460,13 @@ function CellLadderForm({
   workloadId: number;
   /** Levels this (workload, mode) already has — excluded from the batch. */
   existingLevels: Record<CellMode, number[]>;
+  /** A panel's add action creates Cells only in that panel's mode. */
+  fixedMode?: CellMode;
   /** 「复制」预填的来源测试项配置。 */
   initial?: { mode: CellMode; levels: string; requests: string };
   onCreated: (created: number) => Promise<void>;
 }) {
-  const [mode, setMode] = useState<CellMode>(initial?.mode ?? "concurrency");
+  const [mode, setMode] = useState<CellMode>(fixedMode ?? initial?.mode ?? "concurrency");
   const [levelsText, setLevelsText] = useState(initial?.levels ?? "");
   const [requestsText, setRequestsText] = useState(initial?.requests ?? DEFAULT_REQUESTS);
   const [estimate, setEstimate] = useState<Estimate | null>(null);
@@ -540,21 +563,23 @@ function CellLadderForm({
     <div className="flex flex-col gap-3">
       <ErrorBanner message={error} />
       <div className="flex flex-col gap-3">
-        <Field label="模式">
-          <div className="flex gap-3" role="radiogroup" aria-label="模式">
-            {(Object.keys(MODE_LABELS) as CellMode[]).map((value) => (
-              <label key={value} className="flex items-center gap-1 text-sm">
-                <input
-                  type="radio"
-                  name="cell-mode"
-                  checked={mode === value}
-                  onChange={() => setMode(value)}
-                />
-                {MODE_LABELS[value]}
-              </label>
-            ))}
-          </div>
-        </Field>
+        {fixedMode === undefined ? (
+          <Field label="模式">
+            <div className="flex gap-3" role="radiogroup" aria-label="模式">
+              {(Object.keys(MODE_LABELS) as CellMode[]).map((value) => (
+                <label key={value} className="flex items-center gap-1 text-sm">
+                  <input
+                    type="radio"
+                    name="cell-mode"
+                    checked={mode === value}
+                    onChange={() => setMode(value)}
+                  />
+                  {MODE_LABELS[value]}
+                </label>
+              ))}
+            </div>
+          </Field>
+        ) : null}
         <LadderField
           label={mode === "qps" ? "QPS 档位（逗号分隔）" : "并发档位（逗号分隔）"}
           ariaLabel="档位"
@@ -640,10 +665,9 @@ function LadderField({
 }
 
 /**
- * One Workload as a full-width card: header (name, shape, actions), then the
- * mode panels side by side — 并发测试 left, QPS 测试 right, separated by a
- * hairline. A freshly added Workload has no Cells yet — the card is where its
- * first Cell is configured, and where it can be removed again.
+ * One Workload as a responsive card: header (name, shape, actions), then
+ * side-by-side concurrency and QPS panels. Empty modes keep their panel and
+ * show a placeholder so the layout stays predictable while configuring.
  */
 function WorkloadCard({
   group,
@@ -653,17 +677,24 @@ function WorkloadCard({
   onDuplicate,
 }: {
   group: WorkloadGroup;
-  onNewCell: () => void;
-  onDetach: () => void;
+  onNewCell: (mode: CellMode) => void;
+  onDetach: () => Promise<void>;
   onAction: (action: () => Promise<unknown>, toast?: string) => Promise<void>;
   onDuplicate: (cell: Cell) => void;
 }) {
-  const panels = (["concurrency", "qps"] as const)
-    .map((mode) => ({ mode, cells: group.cells.filter((cell) => cell.mode === mode) }))
-    .filter((panel) => panel.cells.length > 0);
+  const [showReport, setShowReport] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const panels = (["concurrency", "qps"] as const).map((mode) => ({
+    mode,
+    cells: group.cells.filter((cell) => cell.mode === mode),
+  }));
 
   return (
-    <li className="flex flex-col gap-4 rounded-[18px] border border-neutral-200 bg-white p-5 shadow-sm [container-type:inline-size] dark:border-neutral-800 dark:bg-neutral-900">
+    <li
+      className="workload-card flex min-w-0 flex-col gap-4 rounded-[18px] border border-neutral-200 bg-white p-4 shadow-sm [container-type:inline-size] dark:border-neutral-800 dark:bg-neutral-900"
+    >
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <h2
@@ -676,43 +707,70 @@ function WorkloadCard({
             {group.shapeText}
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={onNewCell}
-            className="rounded-md border border-neutral-300 bg-neutral-100 px-3 py-1.5 text-xs font-medium text-neutral-700 transition-colors hover:bg-neutral-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
-          >
-            ＋ 添加测试
-          </button>
-          {group.cells.length === 0 ? (
-            <Button variant="ghost" className="px-2 py-1 text-xs" onClick={onDetach}>
-              移除
-            </Button>
-          ) : null}
+        <div role="toolbar" aria-label="负载操作" className="flex shrink-0 items-center gap-1">
+          <IconButton label="查看报告" tone="blue" onClick={() => setShowReport(true)}>
+            <ReportIcon />
+          </IconButton>
+          <IconButton label="删除" tone="red" onClick={() => setConfirmDelete(true)}>
+            <TrashIcon />
+          </IconButton>
         </div>
       </div>
 
-      {group.cells.length === 0 ? (
-        <p className="text-sm text-neutral-500 dark:text-neutral-400">
-          已添加，还没有测试项——点「添加测试」配置压测。
-        </p>
-      ) : null}
-
       <div className="card-panels">
-        {panels.map((panel, index) => (
-          <Fragment key={panel.mode}>
-            {panels.length === 2 && index === 1 ? (
-              <div aria-hidden className="card-panel-divider bg-neutral-100 dark:bg-neutral-800" />
-            ) : null}
-            <ModePanel
-              mode={panel.mode}
-              cells={panel.cells}
-              onAction={onAction}
-              onDuplicate={onDuplicate}
-            />
-          </Fragment>
+        {panels.map((panel) => (
+          <ModePanel
+            key={panel.mode}
+            mode={panel.mode}
+            cells={panel.cells}
+            onAdd={() => onNewCell(panel.mode)}
+            onAction={onAction}
+            onDuplicate={onDuplicate}
+          />
         ))}
       </div>
+      {showReport ? (
+        <Modal
+          title={`${group.workloadName} · 压测报告`}
+          onClose={() => setShowReport(false)}
+          className="flex h-[88vh] max-h-[95vh] max-w-[1240px] flex-col"
+        >
+          <WorkloadReport cells={group.cells} name={group.workloadName} shape={group.shapeText} />
+        </Modal>
+      ) : null}
+      {confirmDelete ? (
+        <Modal
+          title={`删除 ${group.workloadName}`}
+          onClose={() => { if (!deleting) setConfirmDelete(false); }}
+          className="max-w-md"
+        >
+          <div className="flex flex-col gap-4">
+            <p className="text-sm text-neutral-600 dark:text-neutral-300">
+              {group.cells.length > 0
+                ? `将从当前部署删除此负载及其 ${group.cells.length} 个测试项和测量结果，不可恢复。运行中的测试会先停止。`
+                : "将从当前部署删除此负载，不可恢复。"}
+            </p>
+            <ErrorBanner message={deleteError} />
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" disabled={deleting} onClick={() => setConfirmDelete(false)}>取消</Button>
+              <Button
+                variant="danger"
+                disabled={deleting}
+                onClick={() => {
+                  setDeleting(true);
+                  setDeleteError(null);
+                  void onDetach()
+                    .then(() => setConfirmDelete(false))
+                    .catch((caught) => setDeleteError(describe(caught)))
+                    .finally(() => setDeleting(false));
+                }}
+              >
+                确认删除
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      ) : null}
     </li>
   );
 }
@@ -722,24 +780,25 @@ const PANEL_TITLES: Record<CellMode, string> = {
   qps: "QPS 测试",
 };
 
-const PARAM_COLUMN_TITLES: Record<CellMode, string> = {
-  concurrency: "并发数",
-  qps: "QPS",
+const ADD_PANEL_TITLES: Record<CellMode, string> = {
+  concurrency: "添加并发测试",
+  qps: "添加 QPS 测试",
 };
 
 /**
- * One mode panel: title with a count chip and the batch action, then a fixed
- * four-column table (参数 · 状态 · 进度/请求数 · 操作). Results stay off the
- * card — each completed row opens them in a dialog via 查看结果.
+ * One mode panel: title, batch action, compact Cell rows, and an add action
+ * bound to this mode. Results open in a dialog via 查看结果.
  */
 function ModePanel({
   mode,
   cells,
+  onAdd,
   onAction,
   onDuplicate,
 }: {
   mode: CellMode;
   cells: Cell[];
+  onAdd: () => void;
   onAction: (action: () => Promise<unknown>, toast?: string) => Promise<void>;
   onDuplicate: (cell: Cell) => void;
 }) {
@@ -748,7 +807,7 @@ function ModePanel({
     (cell) => cell.status !== "queued" && cell.status !== "running",
   );
   return (
-    <section className="flex min-w-0 flex-col gap-3">
+    <section className="card-mode-panel flex min-w-0 flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-medium">
           {PANEL_TITLES[mode]}
@@ -778,46 +837,49 @@ function ModePanel({
         </button>
       </div>
 
-      <div
-        aria-hidden
-        className="grid grid-cols-[48px_72px_minmax(0,1fr)_44px] items-center gap-2 px-2 text-xs text-neutral-400 dark:text-neutral-500"
+      {cells.length > 0 ? (
+        <ul className="flex flex-col gap-0.5">
+          {cells.map((cell) => (
+            <CellRow
+              key={cell.id}
+              cell={cell}
+              onAction={onAction}
+              onDuplicate={onDuplicate}
+            />
+          ))}
+        </ul>
+      ) : null}
+      <button
+        type="button"
+        aria-label={ADD_PANEL_TITLES[mode]}
+        onClick={onAdd}
+        className={`w-full rounded-lg border border-dashed border-neutral-300 px-2 text-center text-xs font-medium text-neutral-500 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 dark:border-neutral-700 dark:hover:border-blue-700 dark:hover:bg-blue-950/30 dark:hover:text-blue-300 ${
+          cells.length === 0 ? "py-5" : "py-1.5"
+        }`}
       >
-        <span>{PARAM_COLUMN_TITLES[mode]}</span>
-        <span>状态</span>
-        <span>进度 / 请求数</span>
-        <span className="text-right">操作</span>
-      </div>
-
-      <ul className="flex flex-col gap-0.5">
-        {cells.map((cell) => (
-          <CellRow
-            key={cell.id}
-            cell={cell}
-            siblings={cells}
-            onAction={onAction}
-            onDuplicate={onDuplicate}
-          />
-        ))}
-      </ul>
+        {cells.length === 0 ? (
+          <span className="mb-1 block font-normal text-neutral-400">暂无测试项</span>
+        ) : null}
+        ＋ {ADD_PANEL_TITLES[mode]}
+      </button>
     </section>
   );
 }
 
-const ROW_GRID = "grid grid-cols-[48px_72px_minmax(0,1fr)_44px] items-center gap-2";
+const ROW_GRID = "cell-row-grid";
 
 function CellRow({
   cell,
-  siblings,
   onAction,
   onDuplicate,
 }: {
   cell: Cell;
-  siblings: Cell[];
   onAction: (action: () => Promise<unknown>, toast?: string) => Promise<void>;
   onDuplicate: (cell: Cell) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [confirmCellDelete, setConfirmCellDelete] = useState(false);
   const inFlight = cell.status === "queued" || cell.status === "running";
   const progress = cell.progress;
   const percent =
@@ -827,60 +889,50 @@ function CellRow({
           Math.round(((progress.completed_requests ?? 0) / progress.total_requests) * 100),
         )
       : null;
+  const progressDescription =
+    percent !== null
+      ? `${progress?.phase ? `${progress.phase} · ` : ""}${progress?.completed_requests ?? 0}/${progress?.total_requests} 请求`
+      : undefined;
 
   return (
     <li>
       <div
-        className={`${ROW_GRID} rounded-lg px-2 py-1.5 transition-colors ${
+        className={`${ROW_GRID} relative rounded-lg px-2 py-1.5 transition-colors ${
           cell.status === "running"
-            ? "bg-blue-50 py-2 dark:bg-blue-950/40"
+            ? "bg-blue-50 dark:bg-blue-950/40"
             : "hover:bg-neutral-50 dark:hover:bg-neutral-800/60"
         }`}
       >
         <button
           type="button"
-          className="col-span-3 grid grid-cols-[48px_72px_minmax(0,1fr)] items-center gap-2 text-left"
-          onClick={() =>
-            cell.status === "completed" ? setShowResults(true) : setOpen(!open)
-          }
-          {...(cell.status === "completed"
-            ? { "aria-haspopup": "dialog" as const }
-            : { "aria-expanded": open })}
+          className="cell-row-content col-span-3 text-left"
+          onClick={() => {
+            if (cell.status === "completed") setShowResults(true);
+          }}
+          {...(cell.status === "completed" ? { "aria-haspopup": "dialog" as const } : {})}
         >
-          <span className="text-sm tabular-nums text-neutral-800 dark:text-neutral-200">
+          <span className="cell-row-level text-sm font-medium tabular-nums text-neutral-800 dark:text-neutral-200">
             {cell.level}
           </span>
-          <span className="flex items-center gap-1.5">
-            <CellStatusDot status={cell.status} />
-            {cell.stale ? (
-              <span className="truncate text-xs text-amber-700 dark:text-amber-400">
-                · 结果来自旧配置
-              </span>
-            ) : null}
+          <span className="cell-row-requests whitespace-nowrap text-[9px] tabular-nums text-neutral-400">
+            {cell.num_requests} 请求
           </span>
-          <span className="min-w-0 truncate text-xs tabular-nums text-neutral-400">
-            {cell.status === "running" && percent !== null ? (
-              <span className="flex flex-col items-start gap-1">
-                <CellProgress cell={cell} />
-                <span
-                  className="h-1 w-24 overflow-hidden rounded-full bg-blue-100 dark:bg-blue-950"
-                  role="progressbar"
-                  aria-valuenow={percent}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                >
-                  <span
-                    className="block h-1 rounded-full bg-blue-500 transition-all"
-                    style={{ width: `${percent}%` }}
-                  />
-                </span>
-              </span>
-            ) : (
-              `${cell.num_requests} 请求`
-            )}
+          <span className="cell-row-status">
+            <CellStatusDot status={cell.status} phase={progress?.phase} />
+            <span
+              className={`cell-row-progress-label text-[9px] tabular-nums ${
+                percent !== null
+                  ? "text-blue-600 dark:text-blue-300"
+                  : "text-amber-700 dark:text-amber-400"
+              }`}
+              title={progressDescription ?? (cell.stale ? "结果来自旧配置" : undefined)}
+              aria-hidden={percent === null && !cell.stale}
+            >
+              {percent !== null ? `${percent}%` : cell.stale ? "旧" : null}
+            </span>
           </span>
         </button>
-        <div className="flex items-center justify-end">
+        <div className="cell-row-actions flex items-center justify-end">
           {inFlight ? (
             <IconButton
               label="停止"
@@ -900,57 +952,87 @@ function CellRow({
                 onShowResults={
                   cell.status === "completed" ? () => setShowResults(true) : undefined
                 }
-                onEdit={() => setOpen(true)}
+                onEdit={() => setEditing(true)}
                 onDuplicate={() => onDuplicate(cell)}
-                onDelete={() => void onAction(() => api.deleteCell(cell.id), "已删除该测试项")}
+                onDelete={() => setConfirmCellDelete(true)}
               />
             </>
           )}
         </div>
+        {percent !== null ? (
+          <span
+            className="cell-row-progress-track absolute inset-x-2 bottom-0 h-0.5 overflow-hidden rounded-full bg-blue-100 dark:bg-blue-950"
+            role="progressbar"
+            aria-label={`运行进度 ${percent}%`}
+            aria-valuetext={progressDescription}
+            aria-valuenow={percent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <span
+              className="block h-full rounded-full bg-blue-500 transition-all"
+              style={{ width: `${percent}%` }}
+            />
+          </span>
+        ) : null}
       </div>
 
-      {open ? (
-        <div className="mt-2 flex flex-col gap-4 rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
-          {cell.error ? (
-            <p role="alert" className="text-sm text-red-700 dark:text-red-400">
-              {cell.error}
-            </p>
-          ) : null}
-          {cell.last_run_at ? (
-            <p className="text-xs text-neutral-400">测于 {relativeTime(cell.last_run_at)}</p>
-          ) : null}
-          {!inFlight ? <NumRequestsEditor cell={cell} onAction={onAction} /> : null}
-          {cell.status === "idle" ? (
-            <p className="text-sm text-neutral-500 dark:text-neutral-400">还没有跑过这个测试项。</p>
-          ) : null}
-        </div>
+      {editing ? (
+        <Modal
+          title={`编辑参数 · ${MODE_LABELS[cell.mode]} ${cell.level}`}
+          onClose={() => setEditing(false)}
+          className="max-w-md"
+        >
+          <div className="flex flex-col gap-4">
+            {cell.error ? (
+              <p role="alert" className="text-sm text-red-700 dark:text-red-400">
+                {cell.error}
+              </p>
+            ) : null}
+            {cell.last_run_at ? (
+              <p className="text-xs text-neutral-400">测于 {relativeTime(cell.last_run_at)}</p>
+            ) : null}
+            {!inFlight ? <NumRequestsEditor cell={cell} onAction={onAction} /> : null}
+            <div className="flex justify-end">
+              <Button variant="ghost" onClick={() => setEditing(false)}>
+                关闭
+              </Button>
+            </div>
+          </div>
+        </Modal>
       ) : null}
 
       {showResults ? (
         <Modal
           title={`${MODE_LABELS[cell.mode]} ${cell.level} · 压测结果`}
           onClose={() => setShowResults(false)}
-          className="max-w-4xl"
+          className="max-w-[800px]"
         >
-          <div className="flex max-h-[75vh] flex-col gap-4 overflow-y-auto">
-            {cell.last_run_at ? (
-              <p className="text-xs text-neutral-400">测于 {relativeTime(cell.last_run_at)}</p>
-            ) : null}
-            {cell.stale ? (
-              <p className="text-xs text-amber-700 dark:text-amber-400">结果来自旧配置</p>
-            ) : null}
-            <CellSummary cell={cell} />
-            <CellLatencyTable cell={cell} />
-            <CellHistograms cell={cell} />
-            <CellCurves cells={siblings} mode={cell.mode} />
-            {cell.artifact_dir ? (
-              <a
-                href={artifactsZipUrl(cell.id)}
-                className="text-sm text-neutral-600 underline dark:text-neutral-300"
+          <CellReport cell={cell} />
+        </Modal>
+      ) : null}
+      {confirmCellDelete ? (
+        <Modal
+          title={`删除${MODE_LABELS[cell.mode]} ${cell.level} 测试`}
+          onClose={() => setConfirmCellDelete(false)}
+          className="max-w-md"
+        >
+          <div className="flex flex-col gap-4">
+            <p className="text-sm text-neutral-600 dark:text-neutral-300">
+              删除后，此测试项及其测量结果不可恢复。
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setConfirmCellDelete(false)}>取消</Button>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  setConfirmCellDelete(false);
+                  void onAction(() => api.deleteCell(cell.id), "已删除该测试项");
+                }}
               >
-                下载全部产物（zip）
-              </a>
-            ) : null}
+                确认删除
+              </Button>
+            </div>
           </div>
         </Modal>
       ) : null}
