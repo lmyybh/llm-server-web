@@ -1,6 +1,6 @@
 "use client";
 
-import type { CaseVerdict, InspectionCase, InspectionTarget } from "../lib/api";
+import type { CaseVerdict, InspectionCase } from "../lib/api";
 
 /**
  * Unlike the bench charts, colour here *is* a verdict — and that is the point.
@@ -38,7 +38,7 @@ export function VerdictBadge({ verdict }: { verdict: CaseVerdict }) {
 
 export function CaseList({ cases }: { cases: InspectionCase[] }) {
   if (cases.length === 0) {
-    return <p className="px-4 py-6 text-center text-sm text-neutral-400">还没有结果。</p>;
+    return <p className="px-4 py-6 text-center text-sm text-neutral-400">暂无用例结果。</p>;
   }
   return (
     <ul className="divide-y divide-neutral-100 dark:divide-neutral-800">
@@ -59,42 +59,5 @@ export function CaseList({ cases }: { cases: InspectionCase[] }) {
         </li>
       ))}
     </ul>
-  );
-}
-
-/**
- * What the service said about itself before any case ran.
- *
- * Worth showing because the cases decide what to do based on it: `unknown`
- * capability means a case probes conservatively instead of demanding.
- */
-export function TargetSummary({ target }: { target: InspectionTarget | null }) {
-  if (!target) return null;
-  const capability = (state: string) =>
-    state === "supported" ? "支持" : state === "unsupported" ? "不支持" : "未声明";
-
-  return (
-    <dl className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm sm:grid-cols-4">
-      <Entry label="模型" value={target.model} mono />
-      <Entry label="引擎" value={`${target.server_kind}${target.server_version ? ` ${target.server_version}` : ""}`} />
-      <Entry
-        label="上下文"
-        value={target.context_length ? target.context_length.toLocaleString() : "未知"}
-      />
-      <Entry label="工具调用" value={capability(target.tools)} />
-      <Entry label="思考模式" value={capability(target.thinking)} />
-      <Entry label="Tokenizer" value={target.tokenizer_available ? "可用" : "不可用"} />
-    </dl>
-  );
-}
-
-function Entry({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="min-w-0">
-      <dt className="text-xs text-neutral-500 dark:text-neutral-400">{label}</dt>
-      <dd className={`truncate ${mono ? "font-mono" : ""}`} title={value}>
-        {value}
-      </dd>
-    </div>
   );
 }

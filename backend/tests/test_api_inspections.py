@@ -83,6 +83,33 @@ def test_starting_an_inspection_creates_a_run(client, service_id):
     assert run["cases"] == []
 
 
+def test_configured_cases_are_snapshotted_when_a_run_starts(client, service_id):
+    catalogue = client.get("/api/inspection-cases").json()
+    assert catalogue[0]["title"] == "生成接口健康检查"
+    selected = [catalogue[2]["case_id"], catalogue[0]["case_id"]]
+    configured = client.put(
+        f"/api/services/{service_id}/inspection-cases", json={"case_ids": selected}
+    )
+    assert configured.status_code == 200, configured.text
+    assert configured.json()["enabled_case_ids"] == [selected[1], selected[0]]
+
+    first = client.post(f"/api/services/{service_id}/inspections").json()
+    assert first["case_ids"] == [selected[1], selected[0]]
+    client.put(
+        f"/api/services/{service_id}/inspection-cases",
+        json={"case_ids": [catalogue[1]["case_id"]]},
+    )
+    assert client.get(f"/api/inspections/{first['id']}").json()["case_ids"] == first["case_ids"]
+
+
+def test_invalid_case_selection_is_rejected(client, service_id):
+    for selected in ([], ["not-a-case"], ["health.generate", "health.generate"]):
+        response = client.put(
+            f"/api/services/{service_id}/inspection-cases", json={"case_ids": selected}
+        )
+        assert response.status_code == 422
+
+
 def test_starting_an_inspection_for_an_unknown_service_is_a_404(client):
     assert client.post("/api/services/999/inspections").status_code == 404
 
@@ -125,6 +152,29 @@ def test_case_results_come_back_with_their_requirement_flag(client, service_id):
     assert cases[1]["verdict"] == "SKIPPED"
 
 
+def test_completed_case_evidence_is_available_before_the_run_finishes(client, service_id):
+    connection = store.connect(client.app.state.db_path)
+    try:
+        run = store.create_inspection_run(connection, service_id)
+        store.set_inspection_status(connection, run["id"], "running")
+        store.record_inspection_case(
+            connection, run["id"], 0,
+            {"case_id": "health.generate", "required": True, "verdict": "FAIL",
+             "reason_code": "assertion_failed", "message": "complete error",
+             "evidence": [{"method": "GET", "url": "http://host:9000/health_generate",
+                           "request_body": None, "response_body": "full response"}]},
+        )
+    finally:
+        connection.close()
+
+    detail = client.get(f"/api/inspections/{run['id']}").json()
+    assert detail["status"] == "running"
+    assert detail["completed_cases"] == 1
+    assert detail["cases"][0]["evidence"][0]["response_body"] == "full response"
+    listed = client.get(f"/api/services/{service_id}/inspections").json()
+    assert listed[0]["completed_cases"] == 1
+
+
 def test_inspections_are_listed_newest_first(client, service_id):
     first = client.post(f"/api/services/{service_id}/inspections").json()
     second = client.post(f"/api/services/{service_id}/inspections").json()
@@ -134,6 +184,45 @@ def test_inspections_are_listed_newest_first(client, service_id):
 
 def test_an_unknown_inspection_is_a_404(client):
     assert client.get("/api/inspections/999").status_code == 404
+
+
+# --- deleting history -------------------------------------------------------
+
+
+def test_a_finished_inspection_can_be_deleted_with_its_case_evidence(client, service_id):
+    connection = store.connect(client.app.state.db_path)
+    try:
+        run = store.create_inspection_run(connection, service_id)
+        store.record_inspection_case(connection, run["id"], 0, {
+            "case_id": "health.generate", "required": True, "verdict": "PASS",
+            "reason_code": "assertions_passed", "message": "",
+            "evidence": [{"response_status": 200, "response_body": "ok"}],
+        })
+        store.set_inspection_status(connection, run["id"], "completed", verdict="PASS")
+    finally:
+        connection.close()
+
+    assert client.delete(f"/api/inspections/{run['id']}").status_code == 204
+    assert client.get(f"/api/inspections/{run['id']}").status_code == 404
+    assert client.get(f"/api/services/{service_id}/inspections").json() == []
+    connection = store.connect(client.app.state.db_path)
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM inspection_case_result WHERE inspection_run_id = ?", (run["id"],)
+        ).fetchone()[0] == 0
+    finally:
+        connection.close()
+
+
+def test_an_active_inspection_must_be_cancelled_before_deleting(client, service_id):
+    run = client.post(f"/api/services/{service_id}/inspections").json()
+    response = client.delete(f"/api/inspections/{run['id']}")
+    assert response.status_code == 409
+    assert client.get(f"/api/inspections/{run['id']}").status_code == 200
+
+
+def test_deleting_an_unknown_inspection_is_a_404(client):
+    assert client.delete("/api/inspections/999").status_code == 404
 
 
 # --- cancelling -------------------------------------------------------------

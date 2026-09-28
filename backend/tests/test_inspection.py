@@ -9,7 +9,12 @@ is broken", which is how a tool gets ignored.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
+from aiohttp import web
+
+from llmbench import inspection
 
 from llmbench.inspection import (
     ERROR,
@@ -92,12 +97,12 @@ class TestSafeRejection:
 
 
 class TestValidToolCall:
-    def tool_body(self, arguments: str = '{"value": "pong"}') -> dict:
+    def tool_body(self, arguments: str = '{"city": "Paris"}') -> dict:
         return {
             "choices": [
                 {
                     "message": {
-                        "tool_calls": [{"function": {"name": "echo", "arguments": arguments}}]
+                        "tool_calls": [{"function": {"name": "get_weather", "arguments": arguments}}]
                     },
                     "finish_reason": "tool_calls",
                 }
@@ -107,7 +112,12 @@ class TestValidToolCall:
     def test_a_proper_call_passes(self):
         assert valid_tool_call(exchange(body=self.tool_body()))
 
-    def test_the_wrong_finish_reason_fails(self):
+    def test_a_complete_call_with_length_finish_reason_fails(self):
+        body = self.tool_body()
+        body["choices"][0]["finish_reason"] = "length"
+        assert not valid_tool_call(exchange(body=body))
+
+    def test_a_complete_call_with_stop_finish_reason_fails(self):
         body = self.tool_body()
         body["choices"][0]["finish_reason"] = "stop"
         assert not valid_tool_call(exchange(body=body))
@@ -121,7 +131,103 @@ class TestValidToolCall:
         assert not valid_tool_call(exchange(body=body))
 
     def test_a_non_string_argument_fails(self):
-        assert not valid_tool_call(exchange(body=self.tool_body('{"value": 42}')))
+        assert not valid_tool_call(exchange(body=self.tool_body('{"city": 42}')))
+
+    def test_a_missing_city_argument_fails(self):
+        assert not valid_tool_call(exchange(body=self.tool_body('{"value": "pong"}')))
+
+    def test_a_non_object_argument_fails(self):
+        assert not valid_tool_call(exchange(body=self.tool_body('"pong"')))
+
+    def test_every_returned_tool_call_must_be_valid(self):
+        body = self.tool_body()
+        body["choices"][0]["message"]["tool_calls"].append(
+            {"function": {"name": "get_weather", "arguments": "{"}}
+        )
+        assert not valid_tool_call(exchange(body=body))
+
+
+@pytest.mark.parametrize("finish_reason, expected", [("tool_calls", PASS), ("length", FAIL)])
+def test_tool_probe_requires_tool_calls_finish_reason(finish_reason, expected):
+    async def scenario():
+        async def completion(request):
+            payload = await request.json()
+            assert set(payload) == {"model", "messages", "tools"}
+            assert payload["model"] == "test-model"
+            assert payload["messages"] == [{"role": "user", "content": "What's the weather in Paris?"}]
+            assert payload["tools"] == [{
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather for a city",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                },
+            }]
+            return web.json_response({
+                "choices": [{
+                    "finish_reason": finish_reason,
+                    "message": {"content": "", "tool_calls": [
+                        {"type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+                        for _ in range(4)
+                    ]},
+                }],
+            })
+
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", completion)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base_url = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
+        try:
+            facts = TargetFacts(base_url, "test-model", tools=SUPPORTED)
+            async with inspection.aiohttp.ClientSession() as session:
+                outcome = await inspection.case_extensions_tools(session, facts)
+        finally:
+            await runner.cleanup()
+        assert outcome.verdict == expected
+
+    asyncio.run(scenario())
+
+
+def test_general_and_thinking_probes_do_not_limit_output_tokens():
+    facts = TargetFacts("http://example.invalid", "test-model")
+    for payload in (
+        inspection.baseline_payload(facts),
+        inspection.thinking_request(facts, True),
+        inspection.thinking_request(facts, False),
+    ):
+        assert "max_tokens" not in payload
+
+
+def test_context_overflow_probe_does_not_limit_output_tokens():
+    async def scenario():
+        async def completion(request):
+            payload = await request.json()
+            assert "max_tokens" not in payload
+            return web.json_response({"error": {"message": "context too long"}}, status=400)
+
+        app = web.Application()
+        app.router.add_post("/v1/chat/completions", completion)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base_url = f"http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}"
+        try:
+            facts = TargetFacts(base_url, "test-model", context_length=8, tokenizer_available=True)
+            async with inspection.aiohttp.ClientSession() as session:
+                outcome = await inspection.case_context_overflow(session, facts)
+        finally:
+            await runner.cleanup()
+        assert outcome.verdict == PASS
+
+    asyncio.run(scenario())
 
 
 class TestHasReasoning:
@@ -263,3 +369,35 @@ def test_target_facts_record_an_unknown_capability_as_unknown():
     assert facts.tools == UNKNOWN
     assert facts.thinking == UNKNOWN
     assert facts.tools != SUPPORTED
+
+
+def test_selected_case_emits_complete_request_and_response(monkeypatch):
+    async def scenario():
+        app = web.Application()
+        app.router.add_get("/health_generate", lambda _: web.Response(text='{"status":"ready"}'))
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        base_url = f"http://127.0.0.1:{port}"
+
+        async def fake_discover(url, *, api_key=None):
+            return TargetFacts(base_url=url, model="test-model"), []
+
+        monkeypatch.setattr(inspection, "discover", fake_discover)
+        events = []
+        try:
+            summary = await inspection.run_inspection(
+                base_url, selected_case_ids=["health.generate"], on_event=events.append
+            )
+        finally:
+            await runner.cleanup()
+        assert [case.case_id for case in summary.cases] == ["health.generate"]
+        finished = next(event for event in events if event["type"] == "case_finished")
+        assert finished["ordinal"] == 0
+        assert finished["evidence"][0]["method"] == "GET"
+        assert finished["evidence"][0]["request_body"] is None
+        assert finished["evidence"][0]["response_body"] == '{"status":"ready"}'
+
+    asyncio.run(scenario())

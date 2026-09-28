@@ -22,6 +22,7 @@ from fastapi.responses import JSONResponse, Response
 
 from llmbench import datasets
 from llmbench.datasets import DatasetError
+from llmbench.inspection import case_catalogue
 
 from . import estimate, store, supervisor
 from .config import ARTIFACTS_ROOT, CORS_ORIGIN_REGEX, CORS_ORIGINS, database_path
@@ -31,6 +32,7 @@ from .schemas import (
     CellUpdate,
     DeploymentCreate,
     DeploymentUpdate,
+    InspectionCaseSelection,
     ModelCreate,
     ModelUpdate,
     ServiceCreate,
@@ -431,6 +433,11 @@ def compare(model_id: int, deployment_ids: str, connection: sqlite3.Connection =
 # --- services and inspection -------------------------------------------------
 
 
+@router.get("/inspection-cases")
+def list_inspection_cases() -> list[dict]:
+    return case_catalogue()
+
+
 @router.get("/services")
 def list_services(connection: sqlite3.Connection = Connection) -> list[dict]:
     return store.list_services(connection)
@@ -455,6 +462,14 @@ def update_service(
     )
 
 
+@router.put("/services/{service_id}/inspection-cases")
+def configure_inspection_cases(
+    service_id: int, payload: InspectionCaseSelection,
+    connection: sqlite3.Connection = Connection,
+) -> dict:
+    return _guard(store.set_service_inspection_cases, connection, service_id, payload.case_ids)
+
+
 @router.get("/services/{service_id}/inspections")
 def list_inspections(service_id: int, connection: sqlite3.Connection = Connection) -> list[dict]:
     return _guard(store.list_inspection_runs, connection, service_id)
@@ -474,6 +489,13 @@ def get_inspection(
     inspection_run_id: int, connection: sqlite3.Connection = Connection
 ) -> dict:
     return _guard(store.get_inspection_run, connection, inspection_run_id)
+
+
+@router.delete("/inspections/{inspection_run_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_inspection(
+    inspection_run_id: int, connection: sqlite3.Connection = Connection
+):
+    _guard(store.delete_inspection_run, connection, inspection_run_id)
 
 
 @router.post("/inspections/{inspection_run_id}/cancel")

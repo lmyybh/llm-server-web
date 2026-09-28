@@ -1,8 +1,8 @@
 """How long Cells will take, before committing to them.
 
-A global serial queue makes this matter: while one Cell is going, nothing
-else starts. "I have to wait" is survivable; "I have to wait and have no idea
-how long" is what makes a tool feel broken.
+Cells targeting one URL run serially, so a long ladder still makes the next
+Cell for that target wait. "I have to wait" is survivable; "I have to wait and
+have no idea how long" is what makes a tool feel broken.
 
 The estimate is deliberately crude and says so — its job is to be the right
 order of magnitude, not to be a promise.

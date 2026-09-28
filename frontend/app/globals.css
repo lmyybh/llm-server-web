@@ -49,6 +49,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   .text-balance { text-wrap: balance; }
 }
 
+.catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
+  align-items: stretch;
+  gap: 1.25rem;
+}
+
+.catalog-card { min-height: 11rem; }
+
 .workload-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr));

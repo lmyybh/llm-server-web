@@ -1,11 +1,13 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 
 import InspectionPage from "../app/inspections/[id]/page";
 import ServicesPage from "../app/services/page";
 import ServicePage from "../app/services/[id]/page";
+import { curlCommand } from "../app/components/inspection-workspace";
 import { fakeApi, makeInspection, makeService } from "./helpers";
+import type { InspectionExchange } from "../app/lib/api";
 
 vi.mock("next/link", async () => {
   const React = await import("react");
@@ -15,204 +17,284 @@ vi.mock("next/link", async () => {
   };
 });
 
-vi.mock("next/navigation", () => ({
-  useParams: () => ({ id: "1" }),
-}));
+const routerReplace = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({ useParams: () => ({ id: "1" }), useRouter: () => ({ replace: routerReplace }) }));
 
-/** The case list, so a verdict in the header badge is not mistaken for one here. */
-function cases(): HTMLElement {
-  return screen.getByText("用例").closest("div") as HTMLElement;
-}
+afterEach(() => { vi.unstubAllGlobals(); routerReplace.mockClear(); });
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
+const exchange: InspectionExchange = {
+  method: "POST",
+  url: "http://host:9000/v1/chat/completions",
+  request_body: '{"model":"DeepSeek-V4-Flash"}',
+  content_type: "application/json",
+  auth_required: true,
+  response_status: 200,
+  response_body: '{"choices":[{"message":{"content":"pong"}}]}',
+  latency_ms: 123,
+  error: null,
+};
 
-// --- the services list ------------------------------------------------------
-
-test("an empty install says what to do first", async () => {
+test("an empty install offers a new service card", async () => {
   vi.stubGlobal("fetch", fakeApi({}));
   render(<ServicesPage />);
-  expect(await screen.findByText(/还没有登记服务/)).toBeInTheDocument();
+  expect(await screen.findByText(/暂无已登记服务/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /新建服务/ })).toBeInTheDocument();
 });
 
-test("a service needs a name and a router address and nothing else", async () => {
+test("a service needs a name and a router address", async () => {
   vi.stubGlobal("fetch", fakeApi({}));
   render(<ServicesPage />);
-  await screen.findByText(/还没有登记服务/);
-
-  await userEvent.type(screen.getByLabelText("名称"), "灰度");
+  await screen.findByText(/暂无已登记服务/);
+  await userEvent.click(screen.getByRole("button", { name: /新建服务/ }));
+  const dialog = screen.getByRole("dialog", { name: "新建服务" });
+  await userEvent.type(screen.getByLabelText("服务名称"), "灰度");
   await userEvent.type(screen.getByLabelText(/Router 地址/), "http://host:9000");
-  await userEvent.click(screen.getByRole("button", { name: "新建服务" }));
-
+  await userEvent.click(within(dialog).getByRole("button", { name: "新建服务" }));
   expect(await screen.findByText("灰度")).toBeInTheDocument();
+});
+
+test("the new service dialog can be cancelled", async () => {
+  vi.stubGlobal("fetch", fakeApi({}));
+  render(<ServicesPage />);
+  await userEvent.click(await screen.findByRole("button", { name: /新建服务/ }));
+  const dialog = screen.getByRole("dialog", { name: "新建服务" });
+  await userEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+  expect(screen.queryByRole("dialog", { name: "新建服务" })).not.toBeInTheDocument();
+});
+
+test("a service creation error remains visible in the dialog", async () => {
+  vi.stubGlobal("fetch", fakeApi({ services: [makeService({ name: "灰度" })] }));
+  render(<ServicesPage />);
+  await userEvent.click(await screen.findByRole("button", { name: /新建服务/ }));
+  const dialog = screen.getByRole("dialog", { name: "新建服务" });
+  await userEvent.type(within(dialog).getByLabelText("服务名称"), "灰度");
+  await userEvent.type(within(dialog).getByLabelText("Router 地址"), "http://host:9000");
+  await userEvent.click(within(dialog).getByRole("button", { name: "新建服务" }));
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("a service named '灰度' already exists");
 });
 
 test("the 巡检 nav entry is live", async () => {
   vi.stubGlobal("fetch", fakeApi({ services: [makeService()] }));
   render(<ServicesPage />);
-  // The page itself is what the nav points at; reaching it at all is the check.
   expect(await screen.findByText("V4-Flash 灰度")).toBeInTheDocument();
 });
 
-// --- one service ------------------------------------------------------------
-
-test("a service offers to be inspected", async () => {
-  vi.stubGlobal("fetch", fakeApi({ services: [makeService({ id: 1 })] }));
+test("service page uses a timeline without four summary cards", async () => {
+  vi.stubGlobal("fetch", fakeApi({ services: [makeService()], inspections: [makeInspection()] }));
   render(<ServicePage />);
-  expect(await screen.findByRole("button", { name: "开始巡检" })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "配置巡检项" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "开始巡检" })).toBeInTheDocument();
+  expect(screen.getByText("用例进度 2 / 2")).toBeInTheDocument();
+  expect(screen.queryByText("最近一次巡检")).not.toBeInTheDocument();
 });
 
-test("starting an inspection puts it in the history", async () => {
-  vi.stubGlobal("fetch", fakeApi({ services: [makeService({ id: 1 })], inspections: [] }));
+test("configured cases are used for the next inspection", async () => {
+  vi.stubGlobal("fetch", fakeApi({ services: [makeService()], inspections: [] }));
   render(<ServicePage />);
-  await screen.findByText("还没有巡检过。");
-
+  await userEvent.click(await screen.findByRole("button", { name: "配置巡检项" }));
+  const dialog = screen.getByRole("dialog", { name: "配置巡检项" });
+  await userEvent.click(within(dialog).getByRole("checkbox", { name: /工具调用能力/ }));
+  await userEvent.click(within(dialog).getByRole("button", { name: "保存配置" }));
+  expect(await screen.findByText("已启用 1 / 4 项")).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "开始巡检" }));
-  expect(await screen.findByText("#1")).toBeInTheDocument();
+  expect(await screen.findByText("用例进度 0 / 1")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^巡检 #1/ })).toBeInTheDocument();
 });
 
-test("an inspection history shows the suite version, because results depend on it", async () => {
-  vi.stubGlobal(
-    "fetch",
-    fakeApi({ services: [makeService({ id: 1 })], inspections: [makeInspection({ id: 4 })] }),
-  );
+test("choosing a history record switches the timeline without leaving the service page", async () => {
+  vi.stubGlobal("fetch", fakeApi({
+    services: [makeService()],
+    inspections: [makeInspection({ id: 2 }), makeInspection({
+      id: 1, case_ids: ["health.generate"], completed_cases: 1,
+      cases: [{ case_id: "health.generate", required: true, verdict: "PASS", reason_code: "assertions_passed", message: "" }],
+    })],
+  }));
+  const originalUrl = window.location.href;
   render(<ServicePage />);
-  expect(await screen.findByText("用例集 v2")).toBeInTheDocument();
-  expect(screen.getByText("通过")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: /巡检 #2/ })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: /^巡检 #1/ }));
+  expect(await screen.findByRole("heading", { name: /巡检 #1/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^巡检 #1/ })).toHaveAttribute("aria-current", "true");
+  expect(screen.getByRole("heading", { name: "V4-Flash 灰度" })).toBeInTheDocument();
+  expect(window.location.href).toBe(originalUrl);
 });
 
-// --- one inspection ---------------------------------------------------------
-
-test("every case is listed with its verdict", async () => {
-  vi.stubGlobal(
-    "fetch",
-    fakeApi({ services: [makeService()], inspections: [makeInspection({ id: 1 })] }),
-  );
-  render(<InspectionPage />);
-
-  await screen.findByText("completion.non_stream");
-  const list = cases();
-  expect(within(list).getByText("completion.non_stream")).toBeInTheDocument();
-  expect(within(list).getByText("extensions.tools")).toBeInTheDocument();
-  expect(within(list).getByText("通过")).toBeInTheDocument();
-  expect(within(list).getByText("跳过")).toBeInTheDocument();
-  expect(within(list).getByText("非必需")).toBeInTheDocument();
+test("deleting a history record requires confirmation and selects the remaining record", async () => {
+  vi.stubGlobal("fetch", fakeApi({
+    services: [makeService()],
+    inspections: [makeInspection({ id: 2 }), makeInspection({ id: 1 })],
+  }));
+  render(<ServicePage />);
+  expect(await screen.findByRole("heading", { name: /巡检 #2/ })).toBeInTheDocument();
+  const record = screen.getByRole("button", { name: /^巡检 #2/ });
+  expect(screen.queryByRole("button", { name: "删除巡检 #2" })).not.toBeInTheDocument();
+  fireEvent.contextMenu(record);
+  await userEvent.click(await screen.findByRole("menuitem", { name: "删除记录" }));
+  const dialog = screen.getByRole("dialog", { name: "删除巡检 #2？" });
+  expect(within(dialog).getByText(/请求、响应和错误详情/)).toBeInTheDocument();
+  await userEvent.click(within(dialog).getByRole("button", { name: "取消" }));
+  fireEvent.contextMenu(record);
+  await userEvent.click(await screen.findByRole("menuitem", { name: "删除记录" }));
+  await userEvent.click(within(screen.getByRole("dialog", { name: "删除巡检 #2？" })).getByRole("button", { name: "删除记录" }));
+  expect(await screen.findByRole("heading", { name: /巡检 #1/ })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /^巡检 #2/ })).not.toBeInTheDocument();
 });
 
-test("inconclusive is shown as its own thing, not as a failure", async () => {
-  vi.stubGlobal(
-    "fetch",
-    fakeApi({
-      services: [makeService()],
-      inspections: [
-        makeInspection({
-          id: 1,
-          verdict: "INCONCLUSIVE",
-          cases: [
-            {
-              case_id: "extensions.thinking",
-              required: true,
-              verdict: "INCONCLUSIVE",
-              reason_code: "capability_unknown",
-              message: "the toggle had no visible effect",
-            },
-          ],
-        }),
-      ],
-    }),
-  );
-  render(<InspectionPage />);
-
-  await screen.findByText("extensions.thinking");
-  const list = cases();
-  expect(within(list).getByText("无法判定")).toBeInTheDocument();
-  expect(within(list).queryByText("失败")).not.toBeInTheDocument();
-  expect(screen.getByText(/不是一回事，所以分开显示/)).toBeInTheDocument();
+test("an inspection in progress cannot be deleted from history", async () => {
+  vi.stubGlobal("fetch", fakeApi({ services: [makeService()], inspections: [makeInspection({ status: "running", verdict: null })] }));
+  render(<ServicePage />);
+  expect(await screen.findByRole("heading", { name: /巡检 #1/ })).toBeInTheDocument();
+  fireEvent.contextMenu(screen.getByRole("button", { name: /^巡检 #1/ }));
+  expect(screen.queryByRole("menuitem", { name: "删除记录" })).not.toBeInTheDocument();
 });
 
-test("a failure is shown as a failure, with the evidence", async () => {
-  vi.stubGlobal(
-    "fetch",
-    fakeApi({
-      services: [makeService()],
-      inspections: [
-        makeInspection({
-          id: 1,
-          verdict: "FAIL",
-          cases: [
-            {
-              case_id: "validation.malformed_json",
-              required: true,
-              verdict: "FAIL",
-              reason_code: "assertion_failed",
-              message: "HTTP 200: the service accepted malformed JSON",
-            },
-          ],
-        }),
-      ],
-    }),
-  );
+test("deleting a record opened by its direct URL returns to the service", async () => {
+  vi.stubGlobal("fetch", fakeApi({ services: [makeService()], inspections: [makeInspection({ id: 1 })] }));
   render(<InspectionPage />);
-
-  await screen.findByText("validation.malformed_json");
-  expect(within(cases()).getByText("失败")).toBeInTheDocument();
-  expect(screen.getByText(/accepted malformed JSON/)).toBeInTheDocument();
+  fireEvent.contextMenu(await screen.findByRole("button", { name: /^巡检 #1/ }));
+  await userEvent.click(await screen.findByRole("menuitem", { name: "删除记录" }));
+  await userEvent.click(within(screen.getByRole("dialog", { name: "删除巡检 #1？" })).getByRole("button", { name: "删除记录" }));
+  expect(routerReplace).toHaveBeenCalledWith("/services/1");
 });
 
-test("what the service said about itself is shown", async () => {
-  vi.stubGlobal(
-    "fetch",
-    fakeApi({ services: [makeService()], inspections: [makeInspection({ id: 1 })] }),
-  );
+test("a completed inspection has no target block and switches history in place", async () => {
+  vi.stubGlobal("fetch", fakeApi({
+    services: [makeService()], inspections: [makeInspection({ id: 1 }), makeInspection({ id: 2 })],
+  }));
+  const originalUrl = window.location.href;
   render(<InspectionPage />);
-
-  const heading = await screen.findByText("目标");
-  const panel = heading.closest("div")!;
-  expect(within(panel).getByText("DeepSeek-V4-Flash-0731")).toBeInTheDocument();
-  expect(within(panel).getByText("32,768")).toBeInTheDocument();
-  expect(within(panel).getAllByText("支持")).toHaveLength(2);
+  expect(await screen.findByRole("heading", { name: /巡检 #1/ })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "目标" })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: /^巡检 #2/ }));
+  expect(await screen.findByRole("heading", { name: /巡检 #2/ })).toBeInTheDocument();
+  expect(window.location.href).toBe(originalUrl);
 });
 
-test("an unknown capability is shown as undeclared rather than as unsupported", async () => {
-  vi.stubGlobal(
-    "fetch",
-    fakeApi({
-      services: [makeService()],
-      inspections: [
-        makeInspection({
-          id: 1,
-          target: { ...makeInspection().target!, tools: "unknown", thinking: "unknown" },
-        }),
-      ],
-    }),
-  );
-  render(<InspectionPage />);
-
-  // "not declared" and "does not support it" lead to different verdicts, so
-  // showing them the same way would hide which one happened.
-  expect(await screen.findAllByText("未声明")).toHaveLength(2);
+test("the suite version is not shown in inspection views", async () => {
+  vi.stubGlobal("fetch", fakeApi({ services: [makeService()], inspections: [makeInspection({ id: 4 })] }));
+  render(<ServicePage />);
+  expect(await screen.findByRole("button", { name: /^巡检 #4/ })).toBeInTheDocument();
+  expect(screen.queryByText(/用例集/)).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: /非流式响应格式/ }));
+  expect(screen.queryByText(/用例集/)).not.toBeInTheDocument();
 });
 
-test("a discovery failure is reported as the inspection not completing", async () => {
-  vi.stubGlobal(
-    "fetch",
-    fakeApi({
-      services: [makeService()],
-      inspections: [
-        makeInspection({
-          id: 1,
-          status: "failed",
-          verdict: "FAIL",
-          target: null,
-          error: "/health returned 502",
-          cases: [],
-        }),
-      ],
-    }),
-  );
+test("the run timeline shows completed, running and waiting states", async () => {
+  vi.stubGlobal("fetch", fakeApi({ services: [makeService()], inspections: [makeInspection({
+    status: "running", completed_cases: 1, current_case: "extensions.tools", cases: [{
+      case_id: "completion.non_stream", required: true, verdict: "PASS",
+      reason_code: "assertions_passed", message: "", evidence: [exchange],
+    }], case_ids: ["completion.non_stream", "extensions.tools", "validation.malformed_json"],
+  })] }));
   render(<InspectionPage />);
+  await screen.findByRole("button", { name: /非流式响应格式/ });
+  expect(screen.getAllByText("已完成").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("执行中").length).toBeGreaterThan(0);
+  expect(screen.getByText("等待")).toHaveClass("text-[10px]");
+});
 
-  expect(await screen.findByText("巡检未能完成")).toBeInTheDocument();
-  expect(screen.getByText("/health returned 502")).toBeInTheDocument();
+test("case details open in a drawer and copy cURL from the command block", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("navigator", Object.assign(Object.create(navigator), { clipboard: { writeText } }));
+  vi.stubGlobal("fetch", fakeApi({ services: [makeService()], inspections: [makeInspection({
+    case_ids: ["completion.non_stream"], completed_cases: 1, cases: [{
+      case_id: "completion.non_stream", required: true, verdict: "PASS",
+      reason_code: "assertions_passed", message: "", evidence: [exchange],
+    }],
+  })] }));
+  render(<InspectionPage />);
+  await userEvent.click(await screen.findByRole("button", { name: /非流式响应格式/ }));
+  const drawer = screen.getByRole("dialog", { name: "非流式响应格式" });
+  expect(within(drawer).getByText("请求体 · 完整内容")).toBeInTheDocument();
+  expect(within(drawer).getByText("响应内容 · 完整内容")).toBeInTheDocument();
+  const copyButton = within(drawer).getByRole("button", { name: "复制请求 1 的 cURL" });
+  expect(copyButton).toHaveTextContent("");
+  expect(copyButton.querySelector("svg")).toBeInTheDocument();
+  const commandBlock = copyButton.parentElement?.parentElement;
+  expect(commandBlock).toHaveTextContent("curl -i -X POST");
+  const displayedCommand = commandBlock?.querySelector("pre");
+  expect(displayedCommand).not.toHaveClass("pt-8");
+  expect(displayedCommand?.textContent).toContain('  --data-raw \'{\n  "model": "DeepSeek-V4-Flash"\n}\'');
+  const requestBody = within(drawer).getByText("请求体 · 完整内容").closest("section")?.querySelector("pre");
+  const responseBody = within(drawer).getByText("响应内容 · 完整内容").closest("section")?.querySelector("pre");
+  expect(requestBody?.textContent).toBe('{\n  "model": "DeepSeek-V4-Flash"\n}');
+  expect(responseBody?.textContent).toContain('\n  "choices": [\n');
+  await userEvent.click(copyButton);
+  expect(writeText).toHaveBeenCalledWith(expect.stringContaining("http://host:9000/v1/chat/completions"));
+  expect(writeText.mock.calls[0][0]).toContain('--data-raw \'{"model":"DeepSeek-V4-Flash"}\'');
+  expect(writeText.mock.calls[0][0]).toContain("${LLM_API_KEY}");
+  const copyRequest = within(drawer).getByRole("button", { name: "复制请求 1 的请求体" });
+  const copyResponse = within(drawer).getByRole("button", { name: "复制请求 1 的响应内容" });
+  expect(copyRequest.querySelector("svg")).toBeInTheDocument();
+  expect(copyResponse.querySelector("svg")).toBeInTheDocument();
+  await userEvent.click(copyRequest);
+  expect(writeText).toHaveBeenLastCalledWith(exchange.request_body);
+  await userEvent.click(copyResponse);
+  expect(writeText).toHaveBeenLastCalledWith(exchange.response_body);
+});
+
+test("closing a case drawer from another case keeps the timeline position", async () => {
+  vi.stubGlobal("fetch", fakeApi({ services: [makeService()], inspections: [makeInspection()] }));
+  render(<ServicePage />);
+  const firstCase = await screen.findByRole("button", { name: /非流式响应格式/ });
+  const timeline = firstCase.closest("ol")?.parentElement as HTMLElement;
+  const focus = firstCase.focus.bind(firstCase);
+  const focusSpy = vi.spyOn(firstCase, "focus").mockImplementation((options?: FocusOptions) => {
+    if (!options?.preventScroll) timeline.scrollTop = 0;
+    focus(options);
+  });
+
+  await userEvent.click(firstCase);
+  const drawer = screen.getByRole("dialog", { name: "非流式响应格式" });
+  timeline.scrollTop = 120;
+  await userEvent.click(drawer.previousElementSibling as HTMLElement);
+  await waitFor(() => expect(drawer).not.toBeInTheDocument());
+  expect(focusSpy).toHaveBeenCalledWith(expect.objectContaining({ preventScroll: true }));
+  expect(timeline.scrollTop).toBe(120);
+});
+
+test("streaming responses format JSON events while preserving the done marker", async () => {
+  vi.stubGlobal("fetch", fakeApi({ services: [makeService()], inspections: [makeInspection({
+    case_ids: ["completion.non_stream"], completed_cases: 1, cases: [{
+      case_id: "completion.non_stream", required: true, verdict: "PASS",
+      reason_code: "assertions_passed", message: "", evidence: [{
+        ...exchange,
+        response_body: 'data: {"choices":[{"delta":{"content":"pong"}}]}\n\ndata: [DONE]\n\n',
+      }],
+    }],
+  })] }));
+  render(<InspectionPage />);
+  await userEvent.click(await screen.findByRole("button", { name: /非流式响应格式/ }));
+  const drawer = screen.getByRole("dialog", { name: "非流式响应格式" });
+  const responseBody = within(drawer).getByText("响应内容 · 完整内容").closest("section")?.querySelector("pre");
+  expect(responseBody?.textContent).toContain('data: {\n        "choices": [');
+  expect(responseBody?.textContent).toContain("data: [DONE]");
+});
+
+test("a failed case shows the full error and response in its drawer", async () => {
+  vi.stubGlobal("fetch", fakeApi({ services: [makeService()], inspections: [makeInspection({
+    verdict: "FAIL", case_ids: ["validation.malformed_json"], completed_cases: 1,
+    cases: [{ case_id: "validation.malformed_json", required: true, verdict: "FAIL",
+      reason_code: "assertion_failed", message: "Complete assertion error\nwith stack trace",
+      evidence: [{ ...exchange, request_body: '{"model":', response_body: "entire response" }] }],
+  })] }));
+  render(<InspectionPage />);
+  await userEvent.click(await screen.findByRole("button", { name: /拒绝损坏的 JSON/ }));
+  const drawer = screen.getByRole("dialog", { name: "拒绝损坏的 JSON" });
+  expect(within(drawer).getByText(/Complete assertion error/)).toBeInTheDocument();
+  expect(within(drawer).getByText("entire response")).toBeInTheDocument();
+  expect(within(drawer).getByText("请求体 · 完整内容").closest("section")?.querySelector("pre")?.textContent).toBe('{"model":');
+});
+
+test("a discovery failure remains visible", async () => {
+  vi.stubGlobal("fetch", fakeApi({ services: [makeService()], inspections: [makeInspection({
+    status: "failed", verdict: "FAIL", target: null, error: "/health returned 502", cases: [], completed_cases: 0,
+  })] }));
+  render(<InspectionPage />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("/health returned 502");
+});
+
+test("cURL quoting keeps apostrophes inside a single shell argument", () => {
+  expect(curlCommand({ ...exchange, request_body: "it's ready" }, "LLM_API_KEY"))
+    .toContain("'it'\\''s ready'");
 });

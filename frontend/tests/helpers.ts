@@ -16,7 +16,7 @@ import type {
 } from "../app/lib/api";
 
 export function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
+  return new Response(status === 204 ? null : JSON.stringify(body), {
     status,
     headers: { "Content-Type": "application/json" },
   });
@@ -200,6 +200,7 @@ export function makeService(overrides: Partial<Service> = {}): Service {
     note: "",
     router_url: "http://host:9000",
     api_key_env: "LLM_API_KEY",
+    enabled_case_ids: ["completion.non_stream", "extensions.tools"],
     created_at: "2026-09-17T00:00:00+00:00",
     updated_at: "2026-09-17T00:00:00+00:00",
     ...overrides,
@@ -211,6 +212,8 @@ export function makeInspection(overrides: Partial<InspectionRun> = {}): Inspecti
     id: 1,
     service_id: 1,
     suite_version: "2",
+    case_ids: ["completion.non_stream", "extensions.tools"],
+    completed_cases: 2,
     target: {
       base_url: "http://host:9000",
       model: "DeepSeek-V4-Flash-0731",
@@ -844,6 +847,15 @@ export function fakeApi(
 
     // --- services and inspection ---
 
+    if (path === "/api/inspection-cases" && method === "GET") {
+      return json([
+        { case_id: "completion.non_stream", title: "非流式响应格式", group: "基础接口" },
+        { case_id: "extensions.tools", title: "工具调用能力", group: "可选能力" },
+        { case_id: "validation.malformed_json", title: "拒绝损坏的 JSON", group: "异常输入" },
+        { case_id: "extensions.thinking", title: "思考模式开关", group: "可选能力" },
+      ]);
+    }
+
     if (path === "/api/services" && method === "GET") {
       return json(services);
     }
@@ -862,6 +874,14 @@ export function fakeApi(
       return found ? json(found) : json({ detail: "service does not exist" }, 404);
     }
 
+    const serviceCases = path.match(/^\/api\/services\/(\d+)\/inspection-cases$/);
+    if (serviceCases && method === "PUT") {
+      const found = services.find((service) => service.id === Number(serviceCases[1]));
+      if (!found) return json({ detail: "service does not exist" }, 404);
+      found.enabled_case_ids = payload.case_ids;
+      return json(found);
+    }
+
     const serviceInspections = path.match(/^\/api\/services\/(\d+)\/inspections$/);
     if (serviceInspections && method === "GET") {
       const id = Number(serviceInspections[1]);
@@ -869,7 +889,9 @@ export function fakeApi(
     }
     if (serviceInspections && method === "POST") {
       const id = Number(serviceInspections[1]);
-      const created = makeInspection({ id: nextId(inspections), service_id: id, status: "running" });
+      const service = services.find((entry) => entry.id === id);
+      const caseIds = service?.enabled_case_ids ?? [];
+      const created = makeInspection({ id: nextId(inspections), service_id: id, status: "running", verdict: null, case_ids: caseIds, completed_cases: 0, cases: [], current_case: caseIds[0] ?? null });
       inspections.push(created);
       return json(created, 201);
     }
@@ -878,6 +900,15 @@ export function fakeApi(
     if (inspectionMatch && method === "GET") {
       const found = inspections.find((r) => r.id === Number(inspectionMatch[1]));
       return found ? json(found) : json({ detail: "inspection does not exist" }, 404);
+    }
+    if (inspectionMatch && method === "DELETE") {
+      const index = inspections.findIndex((r) => r.id === Number(inspectionMatch[1]));
+      if (index < 0) return json({ detail: "inspection does not exist" }, 404);
+      if (inspections[index].status === "queued" || inspections[index].status === "running") {
+        return json({ detail: "cancel it before deleting" }, 409);
+      }
+      inspections.splice(index, 1);
+      return json(null, 204);
     }
 
     const inspectionCancel = path.match(/^\/api\/inspections\/(\d+)\/cancel$/);

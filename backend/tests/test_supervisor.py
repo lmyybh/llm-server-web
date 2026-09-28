@@ -61,6 +61,12 @@ def make_cell(client, deployment_id: int) -> dict:
 
 def supervise(db_path, cell_id: int, code: int) -> None:
     process = subprocess.Popen([sys.executable, "-c", f"raise SystemExit({code})"])
+    connection = store.connect(db_path)
+    try:
+        if store.get_cell(connection, cell_id)["status"] == "running":
+            store.set_cell_status(connection, cell_id, "running", pid=process.pid)
+    finally:
+        connection.close()
     log = open(db_path.parent / f"child-{cell_id}.log", "wb")
     supervisor._supervise(db_path, cell_id, process, log)
 
@@ -121,6 +127,202 @@ def test_a_cancelled_cell_is_not_overwritten_by_the_supervisor(client):
 
     supervise(db_path, cell_id, 0)
     assert client.get(f"/api/cells/{cell_id}").json()["status"] == "cancelled"
+
+
+def test_old_child_cannot_complete_a_newly_queued_rerun(client, monkeypatch):
+    cell_id, db_path = pending_cell(client)
+    process = subprocess.Popen([sys.executable, "-c", "pass"])
+    connection = store.connect(db_path)
+    try:
+        store.set_cell_status(connection, cell_id, "running", pid=process.pid)
+        store.set_cell_status(connection, cell_id, "cancelled")
+        store.queue_cell(connection, cell_id)
+    finally:
+        connection.close()
+
+    monkeypatch.setattr(supervisor, "_start_available", lambda _db_path: [])
+    log = open(db_path.parent / "old-child.log", "wb")
+    supervisor._supervise(db_path, cell_id, process, log)
+    assert client.get(f"/api/cells/{cell_id}").json()["status"] == "queued"
+
+
+def test_queued_cells_run_in_enqueue_order_across_deployments(client, model_id, deployment_id, workload_id, monkeypatch):
+    target_url = client.get(f"/api/deployments/{deployment_id}").json()["router_url"]
+    other = client.post(
+        f"/api/models/{model_id}/deployments",
+        json={"name": "other", "router_url": target_url, "model_name": "m"},
+    ).json()
+    first_created = client.post(
+        f"/api/deployments/{deployment_id}/cells",
+        json={"workload_id": workload_id, "mode": "concurrency", "levels": [1], "num_requests": [1]},
+    ).json()[0]
+    later_created = client.post(
+        f"/api/deployments/{other['id']}/cells",
+        json={"workload_id": workload_id, "mode": "concurrency", "levels": [1], "num_requests": [1]},
+    ).json()[0]
+    db_path = client.app.state.db_path
+    monkeypatch.setattr(store, "_now", lambda: "2026-09-28T00:00:00+00:00")
+    connection = store.connect(db_path)
+    try:
+        store.queue_cell(connection, later_created["id"])
+        store.queue_cell(connection, first_created["id"])
+    finally:
+        connection.close()
+
+    started = []
+    monkeypatch.setattr(supervisor, "_start", lambda _db_path, cell_id: started.append(cell_id))
+    supervisor._start_next(db_path)
+    assert started == [later_created["id"]]
+
+    connection = store.connect(db_path)
+    try:
+        store.set_cell_status(connection, later_created["id"], "running")
+        assert store.next_queued_cell_id(connection) == first_created["id"]
+        store.set_cell_status(connection, later_created["id"], "completed")
+        store.queue_cell(connection, later_created["id"])
+        assert store.next_queued_cell_id(connection) == first_created["id"]
+    finally:
+        connection.close()
+
+
+def test_submit_starts_the_oldest_ticket_even_when_called_for_a_later_one(client, deployment_id, workload_id, monkeypatch):
+    cells = client.post(
+        f"/api/deployments/{deployment_id}/cells",
+        json={"workload_id": workload_id, "mode": "concurrency", "levels": [1, 2], "num_requests": [1]},
+    ).json()
+    db_path = client.app.state.db_path
+    connection = store.connect(db_path)
+    try:
+        store.queue_cell(connection, cells[1]["id"])
+        store.queue_cell(connection, cells[0]["id"])
+    finally:
+        connection.close()
+
+    monkeypatch.undo()  # restore the real submit, then stub process creation
+    started = []
+    monkeypatch.setattr(supervisor, "_start", lambda _db_path, cell_id: started.append(cell_id))
+    assert supervisor.submit(db_path, cells[0]["id"]) is False
+    assert started == [cells[1]["id"]]
+
+
+@pytest.mark.parametrize("same_model", [True, False])
+def test_different_urls_start_in_parallel(client, model_id, deployment_id, workload_id, monkeypatch, same_model):
+    target_model_id = model_id if same_model else client.post(
+        "/api/models", json={"name": "other model"}
+    ).json()["id"]
+    other = client.post(
+        f"/api/models/{target_model_id}/deployments",
+        json={"name": "other", "router_url": DEAD_URL, "model_name": "m"},
+    ).json()
+    cells = [
+        client.post(
+            f"/api/deployments/{deployment}/cells",
+            json={"workload_id": workload_id, "mode": "concurrency", "levels": [1], "num_requests": [1]},
+        ).json()[0]
+        for deployment in (deployment_id, other["id"])
+    ]
+    db_path = client.app.state.db_path
+    monkeypatch.undo()
+    started = []
+
+    def mark_running(_db_path, cell_id):
+        started.append(cell_id)
+        connection = store.connect(db_path)
+        try:
+            store.set_cell_status(connection, cell_id, "running")
+        finally:
+            connection.close()
+
+    monkeypatch.setattr(supervisor, "_start", mark_running)
+    connection = store.connect(db_path)
+    try:
+        store.queue_cell(connection, cells[0]["id"])
+    finally:
+        connection.close()
+    assert supervisor.submit(db_path, cells[0]["id"]) is True
+    connection = store.connect(db_path)
+    try:
+        store.queue_cell(connection, cells[1]["id"])
+    finally:
+        connection.close()
+    assert supervisor.submit(db_path, cells[1]["id"]) is True
+    assert started == [cell["id"] for cell in cells]
+
+
+def test_same_url_is_serial_even_across_models(client, deployment_id, workload_id, monkeypatch):
+    target_url = client.get(f"/api/deployments/{deployment_id}").json()["router_url"]
+    other_model = client.post("/api/models", json={"name": "other model"}).json()
+    other = client.post(
+        f"/api/models/{other_model['id']}/deployments",
+        json={"name": "other", "router_url": target_url, "model_name": "m"},
+    ).json()
+    cells = [
+        client.post(
+            f"/api/deployments/{deployment}/cells",
+            json={"workload_id": workload_id, "mode": "concurrency", "levels": [1], "num_requests": [1]},
+        ).json()[0]
+        for deployment in (deployment_id, other["id"])
+    ]
+    db_path = client.app.state.db_path
+    monkeypatch.undo()
+    started = []
+
+    def mark_running(_db_path, cell_id):
+        started.append(cell_id)
+        connection = store.connect(db_path)
+        try:
+            store.set_cell_status(connection, cell_id, "running")
+        finally:
+            connection.close()
+
+    monkeypatch.setattr(supervisor, "_start", mark_running)
+    connection = store.connect(db_path)
+    try:
+        for cell in cells:
+            store.queue_cell(connection, cell["id"])
+    finally:
+        connection.close()
+    supervisor.submit(db_path, cells[1]["id"])
+    assert started == [cells[0]["id"]]
+    supervisor._start_next(db_path)
+    assert started == [cells[0]["id"]]
+
+    connection = store.connect(db_path)
+    try:
+        store.set_cell_status(connection, cells[0]["id"], "completed")
+    finally:
+        connection.close()
+    supervisor._start_next(db_path)
+    assert started == [cell["id"] for cell in cells]
+
+
+def test_cancelled_child_keeps_its_url_busy_until_it_exits(client, deployment_id, workload_id, monkeypatch):
+    cells = client.post(
+        f"/api/deployments/{deployment_id}/cells",
+        json={"workload_id": workload_id, "mode": "concurrency", "levels": [1, 2], "num_requests": [1]},
+    ).json()
+    db_path = client.app.state.db_path
+    target_url = client.get(f"/api/deployments/{deployment_id}").json()["router_url"]
+    connection = store.connect(db_path)
+    try:
+        for cell in cells:
+            store.queue_cell(connection, cell["id"])
+        store.set_cell_status(connection, cells[0]["id"], "running")
+        store.set_cell_status(connection, cells[0]["id"], "cancelled")
+    finally:
+        connection.close()
+
+    started = []
+    monkeypatch.setattr(supervisor, "_start", lambda _db_path, cell_id: started.append(cell_id))
+    key = (db_path.resolve(), 123456)
+    supervisor._active_targets[key] = target_url
+    try:
+        supervisor._start_next(db_path)
+        assert started == []
+    finally:
+        supervisor._active_targets.pop(key, None)
+    supervisor._start_next(db_path)
+    assert started == [cells[1]["id"]]
 
 
 # --- spawning for real ------------------------------------------------------

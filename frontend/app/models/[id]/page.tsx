@@ -89,7 +89,7 @@ export default function ModelPage() {
       {deployments === null ? (
         <Empty>加载中…</Empty>
       ) : (
-        <ul className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-4">
+        <ul className="catalog-grid">
           {deployments.map((deployment) => (
             <DeploymentCard
               key={deployment.id}
@@ -108,7 +108,7 @@ export default function ModelPage() {
               type="button"
               onClick={() => setFormState({ mode: "create" })}
               disabled={model === null}
-              className="flex h-full min-h-28 w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-neutral-300 text-neutral-400 transition-colors hover:border-neutral-400 hover:text-neutral-600 disabled:opacity-50 dark:border-neutral-700 dark:hover:border-neutral-500 dark:hover:text-neutral-300"
+              className="catalog-card flex h-full w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-neutral-300 text-neutral-400 transition-colors hover:border-neutral-400 hover:text-neutral-600 disabled:opacity-50 dark:border-neutral-700 dark:hover:border-neutral-500 dark:hover:text-neutral-300"
             >
               <span aria-hidden className="text-2xl leading-none">＋</span>
               <span className="text-sm font-medium">新建部署方式</span>
@@ -226,7 +226,7 @@ function DeploymentCard({
   return (
     <li
       className={
-        "relative flex flex-col gap-2 rounded-xl border bg-white p-4 transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-neutral-200/60 dark:bg-neutral-900 dark:hover:shadow-black/40 " +
+        "catalog-card relative flex flex-col gap-3 rounded-2xl border bg-white p-5 transition-all hover:-translate-y-0.5 hover:shadow-lg hover:shadow-neutral-200/60 dark:bg-neutral-900 dark:hover:shadow-black/40 " +
         (selected
           ? "border-neutral-400 dark:border-neutral-500"
           : "border-neutral-200 hover:border-neutral-300 dark:border-neutral-800 dark:hover:border-neutral-600")
@@ -265,7 +265,7 @@ function DeploymentCard({
           </IconButton>
         </div>
       </div>
-      <div className="border-t border-neutral-100 pt-2 dark:border-neutral-800">
+      <div className="mt-auto border-t border-neutral-100 pt-3 dark:border-neutral-800">
         <CellsSummary deployment={deployment} />
       </div>
     </li>

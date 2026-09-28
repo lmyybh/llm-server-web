@@ -80,8 +80,8 @@ export default function DeploymentPage() {
     void refresh();
   }, [refresh]);
 
-  // While anything is in flight, poll: the queue runs one Cell at a time and
-  // the page should show it moving without a manual refresh.
+  // While anything is in flight, poll so queued and running Cells update
+  // without a manual refresh.
   useEffect(() => {
     if (!cells?.some((cell) => cell.status === "queued" || cell.status === "running")) return;
     const timer = setInterval(() => void refresh(), POLL_INTERVAL_MS);

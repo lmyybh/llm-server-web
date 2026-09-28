@@ -45,12 +45,19 @@ async def execute(inspection_run_id: int, db_path: Path) -> None:
                 store.update_inspection_progress(
                     connection, inspection_run_id, current_case=event["case_id"]
                 )
+            elif event["type"] == "case_finished":
+                store.record_inspection_case(
+                    connection, inspection_run_id, event["ordinal"],
+                    {**event["case"], "evidence": event["evidence"]},
+                )
 
-        summary = await run_inspection(service["router_url"], api_key=api_key, on_event=on_event)
+        summary = await run_inspection(
+            service["router_url"], api_key=api_key, on_event=on_event,
+            selected_case_ids=run["case_ids"],
+        )
 
-        # Cases are written once at the end rather than as they finish: a case
-        # is the unit someone reads, and a half-written catalogue of them would
-        # read as a service that is partly fine.
+        # Also cover discovery failure and preserve evidence already written
+        # for completed cases if a final result needs to be reconciled.
         for ordinal, case in enumerate(summary.cases):
             store.record_inspection_case(connection, inspection_run_id, ordinal, case.as_dict())
 

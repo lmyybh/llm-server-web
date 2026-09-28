@@ -333,6 +333,7 @@ export type Service = {
   note: string;
   router_url: string;
   api_key_env: string;
+  enabled_case_ids: string[];
   created_at: string;
   updated_at: string;
 };
@@ -368,6 +369,25 @@ export type InspectionCase = {
   verdict: CaseVerdict;
   reason_code: string;
   message: string;
+  evidence?: InspectionExchange[];
+};
+
+export type InspectionCaseDefinition = {
+  case_id: string;
+  title: string;
+  group: string;
+};
+
+export type InspectionExchange = {
+  method: string;
+  url: string;
+  request_body: string | null;
+  content_type: string | null;
+  auth_required: boolean;
+  response_status: number | null;
+  response_body: string;
+  latency_ms: number;
+  error: string | null;
 };
 
 export type InspectionStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
@@ -376,6 +396,8 @@ export type InspectionRun = {
   id: number;
   service_id: number;
   suite_version: string | null;
+  case_ids: string[];
+  completed_cases: number;
   target: InspectionTarget | null;
   status: InspectionStatus;
   verdict: CaseVerdict | null;
@@ -546,9 +568,15 @@ export const api = {
 
   listInspections: (serviceId: number) =>
     request<InspectionRun[]>(`/api/services/${serviceId}/inspections`),
+  listInspectionCases: () => request<InspectionCaseDefinition[]>("/api/inspection-cases"),
+  configureInspectionCases: (serviceId: number, caseIds: string[]) =>
+    request<Service>(`/api/services/${serviceId}/inspection-cases`, {
+      method: "PUT", body: JSON.stringify({ case_ids: caseIds }),
+    }),
   startInspection: (serviceId: number) =>
     request<InspectionRun>(`/api/services/${serviceId}/inspections`, { method: "POST" }),
   getInspection: (id: number) => request<InspectionRun>(`/api/inspections/${id}`),
+  deleteInspection: (id: number) => request<void>(`/api/inspections/${id}`, { method: "DELETE" }),
   cancelInspection: (id: number) =>
     request<InspectionRun>(`/api/inspections/${id}/cancel`, { method: "POST" }),
 

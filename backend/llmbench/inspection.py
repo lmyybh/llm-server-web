@@ -17,13 +17,15 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import traceback
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 import aiohttp
 
-SUITE_VERSION = "3"
-"""Bumped whenever the catalogue changes. Two Inspection Runs with different
+SUITE_VERSION = "7"
+"""Bumped whenever the catalogue or probe semantics change. Two Inspection Runs with different
 suite versions are not comparable, and the number is what says so."""
 
 HEALTH_PATH = "/health"
@@ -36,6 +38,49 @@ CASE_TIMEOUT_SECONDS = 60.0
 PASS, FAIL, SKIPPED, INCONCLUSIVE, ERROR = "PASS", "FAIL", "SKIPPED", "INCONCLUSIVE", "ERROR"
 
 SUPPORTED, UNSUPPORTED, UNKNOWN = "supported", "unsupported", "unknown"
+
+CASE_METADATA = {
+    "health.generate": ("生成接口健康检查", "基础接口"),
+    "completion.non_stream": ("非流式响应格式", "基础接口"),
+    "streaming.basic": ("流式响应与结束标记", "基础接口"),
+    "validation.malformed_json": ("拒绝损坏的 JSON", "异常输入"),
+    "validation.missing_messages": ("缺失 messages 字段", "异常输入"),
+    "validation.wrong_field_type": ("错误字段类型", "异常输入"),
+    "output.small_limit": ("输出上限生效", "边界行为"),
+    "context.overflow": ("超出上下文长度", "边界行为"),
+    "extensions.tools": ("工具调用能力", "可选能力"),
+    "extensions.thinking": ("思考模式开关", "可选能力"),
+    "disruption.abort_storm": ("客户端中断恢复", "扰动恢复"),
+}
+
+
+def case_catalogue() -> list[dict]:
+    return [
+        {"case_id": case.case_id, "title": CASE_METADATA[case.case_id][0],
+         "group": CASE_METADATA[case.case_id][1]}
+        for case in catalogue()
+    ]
+
+
+_evidence_sink: ContextVar[list[dict] | None] = ContextVar("inspection_evidence", default=None)
+
+
+def _record_exchange(exchange: "Exchange", request_body: str | None, *, auth: bool,
+                     content_type: str | None = None) -> None:
+    evidence = _evidence_sink.get()
+    if evidence is None:
+        return
+    evidence.append({
+        "method": exchange.method,
+        "url": exchange.path,
+        "request_body": request_body,
+        "content_type": content_type,
+        "auth_required": auth,
+        "response_status": exchange.status,
+        "response_body": exchange.text,
+        "latency_ms": exchange.latency_ms,
+        "error": exchange.error,
+    })
 
 
 class DiscoveryError(RuntimeError):
@@ -141,7 +186,10 @@ async def _request(
         path=url,
     )
     try:
-        kwargs: dict = {"headers": headers}
+        request_headers = dict(headers)
+        if raw_body is not None:
+            request_headers.setdefault("Content-Type", "application/json")
+        kwargs: dict = {"headers": request_headers}
         if raw_body is not None:
             kwargs["data"] = raw_body
         elif payload is not None:
@@ -151,7 +199,17 @@ async def _request(
             exchange.text = await response.text()
     except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
         exchange.error = f"{type(exc).__name__}: {exc}"
-    exchange.latency_ms = round((time.monotonic() - started) * 1000, 3)
+    except asyncio.CancelledError:
+        exchange.error = "request cancelled while the case deadline was reached"
+        raise
+    finally:
+        exchange.latency_ms = round((time.monotonic() - started) * 1000, 3)
+        _record_exchange(
+            exchange,
+            raw_body if raw_body is not None else json.dumps(payload) if payload is not None else None,
+            auth="Authorization" in headers,
+            content_type="application/json" if payload is not None or raw_body is not None else None,
+        )
     try:
         exchange.body = json.loads(exchange.text)
     except (json.JSONDecodeError, ValueError):
@@ -375,7 +433,7 @@ async def case_streaming_basic(
         return CaseOutcome(case_id, True, ERROR, "inspector_error", exchange.error)
     if exchange.status != 200:
         return CaseOutcome(
-            case_id, True, FAIL, "assertion_failed", f"HTTP {exchange.status}: {exchange.text[:200]}"
+            case_id, True, FAIL, "assertion_failed", f"HTTP {exchange.status}: {exchange.text}"
         )
     if stream["invalid_events"]:
         return CaseOutcome(
@@ -416,6 +474,7 @@ async def _stream_request(
         path=url,
     )
     parser = SSEParser()
+    chunks: list[bytes] = []
     summary = {
         "events": 0,
         "invalid_events": 0,
@@ -461,9 +520,9 @@ async def _stream_request(
             exchange.status = response.status
             if response.status != 200:
                 exchange.text = await response.text()
-                exchange.latency_ms = round((time.monotonic() - started) * 1000, 3)
                 return exchange, summary
             async for chunk in response.content.iter_any():
+                chunks.append(chunk)
                 if absorb(chunk):
                     break
             if stop_after_tokens is None:
@@ -473,7 +532,17 @@ async def _stream_request(
                         summary["done"] = True
     except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
         exchange.error = f"{type(exc).__name__}: {exc}"
-    exchange.latency_ms = round((time.monotonic() - started) * 1000, 3)
+    except asyncio.CancelledError:
+        exchange.error = "stream cancelled while the case deadline was reached"
+        raise
+    finally:
+        if chunks:
+            exchange.text = b"".join(chunks).decode("utf-8", errors="replace")
+        exchange.latency_ms = round((time.monotonic() - started) * 1000, 3)
+        _record_exchange(
+            exchange, json.dumps(payload), auth="Authorization" in headers,
+            content_type="application/json",
+        )
     return exchange, summary
 
 
@@ -581,7 +650,6 @@ async def case_context_overflow(
     payload = {
         "model": facts.model,
         "messages": [{"role": "user", "content": "x " * (facts.context_length + 64)}],
-        "max_tokens": 1,
         "stream": False,
     }
     exchange = await _request(
@@ -616,24 +684,22 @@ async def case_extensions_tools(
         return CaseOutcome(case_id, False, SKIPPED, "capability_unsupported")
 
     payload = {
-        **baseline_payload(facts),
-        "max_tokens": 128,
-        "chat_template_kwargs": {"enable_thinking": False},
+        "model": facts.model,
+        "messages": [{"role": "user", "content": "What's the weather in Paris?"}],
         "tools": [
             {
                 "type": "function",
                 "function": {
-                    "name": "echo",
-                    "description": "Echo a value back.",
+                    "name": "get_weather",
+                    "description": "Get the current weather for a city",
                     "parameters": {
                         "type": "object",
-                        "properties": {"value": {"type": "string"}},
-                        "required": ["value"],
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
                     },
                 },
             }
         ],
-        "tool_choice": "required",
     }
     exchange = await _request(
         session,
@@ -653,7 +719,7 @@ async def case_extensions_tools(
     if exchange.status and 400 <= exchange.status < 500:
         if required:
             return CaseOutcome(
-                case_id, True, FAIL, "assertion_failed", f"declared tools but refused: {exchange.text[:200]}"
+                case_id, True, FAIL, "assertion_failed", f"declared tools but refused: {exchange.text}"
             )
         return CaseOutcome(case_id, False, SKIPPED, "capability_unsupported")
     if valid_tool_call(exchange):
@@ -663,7 +729,9 @@ async def case_extensions_tools(
     return CaseOutcome(case_id, False, INCONCLUSIVE, "capability_unknown", "tools did not work, but nothing declared them")
 
 
-def valid_tool_call(exchange: Exchange) -> bool:
+def valid_tool_call(
+    exchange: Exchange, *, function_name: str = "get_weather", argument_name: str = "city"
+) -> bool:
     if exchange.status != 200 or not isinstance(exchange.body, dict):
         return False
     choices = exchange.body.get("choices")
@@ -676,20 +744,22 @@ def valid_tool_call(exchange: Exchange) -> bool:
     calls = message.get("tool_calls") if isinstance(message, dict) else None
     if not isinstance(calls, list) or not calls:
         return False
-    function = calls[0].get("function") if isinstance(calls[0], dict) else None
-    if not isinstance(function, dict) or function.get("name") != "echo":
-        return False
-    try:
-        arguments = json.loads(function.get("arguments") or "")
-    except (json.JSONDecodeError, TypeError):
-        return False
-    return isinstance(arguments.get("value"), str)
+    for call in calls:
+        function = call.get("function") if isinstance(call, dict) else None
+        if not isinstance(function, dict) or function.get("name") != function_name:
+            return False
+        try:
+            arguments = json.loads(function.get("arguments") or "")
+        except (json.JSONDecodeError, TypeError):
+            return False
+        if not isinstance(arguments, dict) or not isinstance(arguments.get(argument_name), str):
+            return False
+    return True
 
 
 def thinking_request(facts: TargetFacts, enabled: bool) -> dict:
     return {
         **baseline_payload(facts),
-        "max_tokens": 64,
         "chat_template_kwargs": {"enable_thinking": enabled},
     }
 
@@ -908,7 +978,6 @@ def baseline_payload(facts: TargetFacts) -> dict:
         "model": facts.model,
         "messages": [{"role": "user", "content": "Reply with pong."}],
         "temperature": 0,
-        "max_tokens": 16,
         "stream": False,
     }
 
@@ -925,7 +994,7 @@ def _outcome(case_id: str, passed: bool, exchange: Exchange, *, required: bool =
         required,
         FAIL,
         "assertion_failed",
-        f"HTTP {exchange.status}: {exchange.text[:200]}",
+        f"HTTP {exchange.status}: {exchange.text}",
     )
 
 
@@ -994,6 +1063,7 @@ async def run_inspection(
     *,
     api_key: str | None = None,
     on_event: EventSink | None = None,
+    selected_case_ids: list[str] | None = None,
 ) -> RunSummary:
     """Inspect one service. Never raises for a service's behaviour — only a
     failed discovery is fatal, because nothing can be judged without it."""
@@ -1018,46 +1088,47 @@ async def run_inspection(
     timeout = aiohttp.ClientTimeout(total=CASE_TIMEOUT_SECONDS)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         run_unsafe = False
-        for case in catalogue():
-            if run_unsafe and case.disruptive:
-                summary.cases.append(CaseOutcome(case.case_id, case.required, SKIPPED, "run_unsafe"))
-                continue
-            if case.applicable is not None and not case.applicable(facts):
-                summary.cases.append(CaseOutcome(case.case_id, False, SKIPPED, "not_applicable"))
-                continue
-            emit({"type": "case_started", "case_id": case.case_id})
+        selected = set(selected_case_ids) if selected_case_ids is not None else None
+        cases = [case for case in catalogue() if selected is None or case.case_id in selected]
+        for ordinal, case in enumerate(cases):
+            evidence: list[dict] = []
+            token = _evidence_sink.set(evidence)
             try:
-                outcome = await asyncio.wait_for(
-                    case.run(session, facts, api_key=api_key), timeout=case.timeout_seconds
-                )
-            except asyncio.TimeoutError:
-                outcome = CaseOutcome(
-                    case.case_id, case.required, ERROR, "case_deadline", "case timed out"
-                )
-            except Exception as exc:  # noqa: BLE001 — a broken inspector is not a broken service
-                outcome = CaseOutcome(
-                    case.case_id,
-                    case.required,
-                    ERROR,
-                    "inspector_error",
-                    f"{type(exc).__name__}: {exc}",
-                )
+                if run_unsafe and case.disruptive:
+                    outcome = CaseOutcome(case.case_id, case.required, SKIPPED, "run_unsafe")
+                elif case.applicable is not None and not case.applicable(facts):
+                    outcome = CaseOutcome(case.case_id, False, SKIPPED, "not_applicable")
+                else:
+                    emit({"type": "case_started", "case_id": case.case_id})
+                    try:
+                        outcome = await asyncio.wait_for(
+                            case.run(session, facts, api_key=api_key), timeout=case.timeout_seconds
+                        )
+                    except asyncio.TimeoutError:
+                        outcome = CaseOutcome(
+                            case.case_id, case.required, ERROR, "case_deadline", "case timed out"
+                        )
+                    except Exception:  # noqa: BLE001 — preserve the full inspector error
+                        outcome = CaseOutcome(
+                            case.case_id, case.required, ERROR, "inspector_error",
+                            traceback.format_exc(),
+                        )
 
-            if case.recovery_required and outcome.verdict == PASS:
-                # The case says the disruption was handled; recovery says the
-                # service is still usable afterwards. Both have to hold.
-                if not await verify_recovery(session, facts, api_key=api_key):
-                    outcome = CaseOutcome(
-                        case.case_id,
-                        outcome.required,
-                        FAIL,
-                        "recovery_failed",
-                        "the service did not come back after the disruption",
-                    )
-                    run_unsafe = True
+                    if case.recovery_required and outcome.verdict == PASS:
+                        # Recovery requests belong to the same case evidence.
+                        if not await verify_recovery(session, facts, api_key=api_key):
+                            outcome = CaseOutcome(
+                                case.case_id, outcome.required, FAIL, "recovery_failed",
+                                "the service did not come back after the disruption",
+                            )
+                            run_unsafe = True
+            finally:
+                _evidence_sink.reset(token)
 
             summary.cases.append(outcome)
-            emit({"type": "case_finished", "case_id": case.case_id, "verdict": outcome.verdict})
+            emit({"type": "case_finished", "case_id": case.case_id,
+                  "verdict": outcome.verdict, "ordinal": ordinal,
+                  "case": outcome.as_dict(), "evidence": evidence})
 
     summary.run_verdict = aggregate(summary.cases)
     emit({"type": "run_finished", "verdict": summary.run_verdict})

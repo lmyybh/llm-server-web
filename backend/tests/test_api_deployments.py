@@ -91,6 +91,33 @@ def test_an_unknown_deployment_is_a_404(client):
     assert client.patch("/api/deployments/999", json={"note": "x"}).status_code == 404
 
 
+def test_target_url_cannot_change_while_a_cell_is_queued_or_running(client, deployment_id, cell_id):
+    from server import store
+
+    connection = store.connect(client.app.state.db_path)
+    try:
+        store.queue_cell(connection, cell_id)
+    finally:
+        connection.close()
+    url = "http://different-host:9000"
+    assert client.patch(f"/api/deployments/{deployment_id}", json={"router_url": url}).status_code == 409
+    assert client.patch(f"/api/deployments/{deployment_id}", json={"note": "still editable"}).status_code == 200
+
+    connection = store.connect(client.app.state.db_path)
+    try:
+        store.set_cell_status(connection, cell_id, "running")
+    finally:
+        connection.close()
+    assert client.patch(f"/api/deployments/{deployment_id}", json={"router_url": url}).status_code == 409
+
+    connection = store.connect(client.app.state.db_path)
+    try:
+        store.set_cell_status(connection, cell_id, "completed")
+    finally:
+        connection.close()
+    assert client.patch(f"/api/deployments/{deployment_id}", json={"router_url": url}).status_code == 200
+
+
 # --- router url normalisation ----------------------------------------------
 
 

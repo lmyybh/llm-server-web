@@ -161,6 +161,10 @@ class ServiceUpdate(BaseModel):
     _env = field_validator("api_key_env")(require_env_var_name)
 
 
+class InspectionCaseSelection(BaseModel):
+    case_ids: list[str] = Field(min_length=1)
+
+
 class WorkloadCreate(BaseModel):
     """A preset load shape in the **global** Workload library.
 

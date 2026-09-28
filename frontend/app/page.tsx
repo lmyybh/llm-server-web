@@ -102,7 +102,7 @@ export default function ModelsPage() {
       {models === null ? (
         <Empty>加载中…</Empty>
       ) : (
-        <ul className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-5">
+        <ul className="catalog-grid">
           {models.map((model) => (
             <li key={model.id}>
               <ModelCard
@@ -124,7 +124,7 @@ export default function ModelsPage() {
             {creating ? (
               <form
                 onSubmit={submit}
-                className="flex h-full min-h-40 flex-col gap-2 rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900"
+                className="catalog-card flex h-full flex-col gap-2 rounded-xl border border-neutral-200 bg-white p-4 dark:border-neutral-800 dark:bg-neutral-900"
               >
                 <TextInput
                   aria-label="模型名称"
@@ -153,7 +153,7 @@ export default function ModelsPage() {
               <button
                 type="button"
                 onClick={() => setCreating(true)}
-                className="flex h-full min-h-40 w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-neutral-300 text-neutral-400 transition-colors hover:border-neutral-400 hover:text-neutral-600 dark:border-neutral-700 dark:hover:border-neutral-500 dark:hover:text-neutral-300"
+                className="catalog-card flex h-full w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-neutral-300 text-neutral-400 transition-colors hover:border-neutral-400 hover:text-neutral-600 dark:border-neutral-700 dark:hover:border-neutral-500 dark:hover:text-neutral-300"
               >
                 <span aria-hidden className="text-2xl leading-none">＋</span>
                 <span className="text-sm font-medium">新建模型</span>
@@ -246,7 +246,7 @@ function ModelCard({
   onDelete: () => void;
 }) {
   return (
-    <div className="group relative flex h-full flex-col gap-3 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm shadow-slate-900/[.035] transition-all hover:-translate-y-1 hover:border-blue-200 hover:shadow-xl hover:shadow-blue-900/[.08] dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-600 dark:hover:shadow-black/40">
+    <div className="catalog-card group relative flex h-full flex-col gap-3 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm shadow-slate-900/[.035] transition-all hover:-translate-y-1 hover:border-blue-200 hover:shadow-xl hover:shadow-blue-900/[.08] dark:border-neutral-800 dark:bg-neutral-900 dark:hover:border-neutral-600 dark:hover:shadow-black/40">
       <div className="flex items-start justify-between gap-2">
         <h2 className="truncate text-sm font-semibold">
           <Link

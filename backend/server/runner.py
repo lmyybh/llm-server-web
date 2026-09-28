@@ -126,6 +126,9 @@ async def execute(cell_id: int, db_path: Path) -> None:
     try:
         cell = store.get_cell(connection, cell_id)
         deployment = store.get_deployment(connection, cell["deployment_id"])
+        # The URL is fixed when the supervisor starts this process. A cancelled
+        # Cell may outlive a later edit to its Deployment while it shuts down.
+        deployment["router_url"] = os.environ.get("LLMBENCH_TARGET_URL", deployment["router_url"])
         workload = cell["workload"]
         # The key lives in this process's environment and nowhere else — it is
         # never persisted, so an executor that does not need one never has one.

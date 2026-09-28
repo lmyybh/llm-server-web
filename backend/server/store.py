@@ -13,7 +13,9 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+from llmbench.inspection import CaseOutcome, SUITE_VERSION, aggregate, catalogue
+
+SCHEMA_VERSION = 12
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS model (
@@ -123,6 +125,13 @@ CREATE TABLE IF NOT EXISTS cell (
 CREATE INDEX IF NOT EXISTS cell_deployment_idx ON cell (deployment_id, id);
 CREATE INDEX IF NOT EXISTS cell_workload_idx ON cell (workload_id);
 
+-- A ticket is issued on every enqueue. Its sequence reflects enqueue order,
+-- even when an older Cell is re-run or several Cells share a timestamp.
+CREATE TABLE IF NOT EXISTS cell_queue (
+    position INTEGER PRIMARY KEY AUTOINCREMENT,
+    cell_id  INTEGER NOT NULL UNIQUE REFERENCES cell(id) ON DELETE CASCADE
+);
+
 -- Reusable Cell configurations. A combination does not own run results; an
 -- import copies missing configurations into a Deployment.
 CREATE TABLE IF NOT EXISTS bench_suite (
@@ -156,6 +165,7 @@ CREATE TABLE IF NOT EXISTS service (
     note         TEXT NOT NULL DEFAULT '',
     router_url   TEXT NOT NULL,
     api_key_env  TEXT NOT NULL,
+    enabled_case_ids_json TEXT,
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
@@ -164,6 +174,7 @@ CREATE TABLE IF NOT EXISTS inspection_run (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     service_id    INTEGER NOT NULL REFERENCES service(id) ON DELETE CASCADE,
     suite_version TEXT,
+    case_ids_json TEXT,
     target_json   TEXT,
     status        TEXT NOT NULL,
     verdict       TEXT,
@@ -187,6 +198,7 @@ CREATE TABLE IF NOT EXISTS inspection_case_result (
     verdict           TEXT NOT NULL,
     reason_code       TEXT NOT NULL,
     message           TEXT NOT NULL DEFAULT '',
+    evidence_json     TEXT,
     UNIQUE (inspection_run_id, ordinal)
 );
 """
@@ -324,7 +336,78 @@ def init_db(connection: sqlite3.Connection) -> None:
         for column, kind in (("actual_concurrency", "REAL"), ("metric_summaries_json", "TEXT")):
             if column not in cell_columns:
                 connection.execute(f"ALTER TABLE cell ADD COLUMN {column} {kind}")
+    if 0 < current_version < 9:
+        for table, column in (
+            ("service", "enabled_case_ids_json"),
+            ("inspection_run", "case_ids_json"),
+            ("inspection_case_result", "evidence_json"),
+        ):
+            existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+            if column not in existing:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+    if 0 < current_version < 11:
+        _revert_tool_call_repairs(connection)
+    if 0 < current_version < 12:
+        # Existing queued Cells are normally released during startup recovery.
+        # Preserve their relative order if the database is opened directly.
+        for row in connection.execute(
+            "SELECT id FROM cell WHERE status = 'queued' ORDER BY queued_at, id"
+        ):
+            connection.execute(
+                "INSERT OR IGNORE INTO cell_queue (cell_id) VALUES (?)", (row["id"],)
+            )
     connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _revert_tool_call_repairs(connection: sqlite3.Connection) -> None:
+    """Undo v10's promotion of legacy calls without a tool_calls finish reason."""
+    candidates = connection.execute(
+        """SELECT result.inspection_run_id, result.ordinal, result.evidence_json
+             FROM inspection_case_result AS result
+             JOIN inspection_run AS run ON run.id = result.inspection_run_id
+            WHERE run.status = 'completed'
+              AND run.suite_version = '3'
+              AND result.case_id = 'extensions.tools'
+              AND result.verdict = 'PASS'
+              AND result.reason_code = 'assertions_passed'
+              AND result.message = ''
+              AND result.evidence_json IS NOT NULL"""
+    ).fetchall()
+    reverted_runs: set[int] = set()
+    for candidate in candidates:
+        try:
+            evidence = json.loads(candidate["evidence_json"])
+            if not isinstance(evidence, list) or len(evidence) != 1:
+                continue
+            response = evidence[0]
+            body = json.loads(response["response_body"])
+            choices = body["choices"]
+            if response["response_status"] != 200 or not isinstance(choices, list) or not choices:
+                continue
+            first = choices[0]
+            if not isinstance(first, dict) or first.get("finish_reason") == "tool_calls":
+                continue
+        except (TypeError, ValueError, KeyError, IndexError):
+            continue
+        connection.execute(
+            """UPDATE inspection_case_result
+                  SET verdict = 'FAIL', reason_code = 'assertion_failed',
+                      message = 'no valid tool call came back'
+                WHERE inspection_run_id = ? AND ordinal = ?""",
+            (candidate["inspection_run_id"], candidate["ordinal"]),
+        )
+        reverted_runs.add(candidate["inspection_run_id"])
+
+    for run_id in reverted_runs:
+        rows = connection.execute(
+            "SELECT case_id, required, verdict, reason_code FROM inspection_case_result WHERE inspection_run_id = ?",
+            (run_id,),
+        ).fetchall()
+        verdict = aggregate([
+            CaseOutcome(row["case_id"], bool(row["required"]), row["verdict"], row["reason_code"])
+            for row in rows
+        ])
+        connection.execute("UPDATE inspection_run SET verdict = ? WHERE id = ?", (verdict, run_id))
 
 
 def _now() -> str:
@@ -463,9 +546,23 @@ def update_deployment(connection: sqlite3.Connection, deployment_id: int, change
     """Apply a partial update in place. A Deployment is mutable by design —
     changing a parameter must not force a new entity, or comparisons drown in
     near-duplicates. Correctness comes from the Cell's executed snapshot."""
-    get_deployment(connection, deployment_id)  # raises NotFound before any write
     allowed = {key: value for key, value in changes.items() if key in DEPLOYMENT_FIELDS}
-    if allowed:
+    if not allowed:
+        return get_deployment(connection, deployment_id)
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        deployment = get_deployment(connection, deployment_id)
+        if "router_url" in allowed and allowed["router_url"] != deployment["router_url"]:
+            in_flight = connection.execute(
+                """SELECT COUNT(*) FROM cell
+                   WHERE deployment_id = ? AND status IN ('queued', 'running')""",
+                (deployment_id,),
+            ).fetchone()[0]
+            if in_flight:
+                raise Conflict(
+                    f"deployment {deployment_id} has {in_flight} queued or running cell(s); "
+                    "wait or cancel them before changing its URL"
+                )
         assignments = ", ".join(f"{key} = ?" for key in allowed)
         try:
             connection.execute(
@@ -476,6 +573,10 @@ def update_deployment(connection: sqlite3.Connection, deployment_id: int, change
             raise Conflict(
                 f"this model already has a deployment named {allowed.get('name')!r}"
             ) from exc
+        connection.execute("COMMIT")
+    except Exception:
+        connection.execute("ROLLBACK")
+        raise
     return get_deployment(connection, deployment_id)
 
 
@@ -1008,14 +1109,56 @@ def queue_cell(connection: sqlite3.Connection, cell_id: int) -> dict:
     the executor overwrites the result columns when it finishes. Progress from
     the previous run is cleared here, not by the executor, so the page never
     shows last time's final update as if it were this run's."""
-    cell = get_cell(connection, cell_id)
-    if cell["status"] not in RUNNABLE_CELL_STATUSES:
-        raise Conflict(f"cell {cell_id} is {cell['status']}; it cannot be started now")
-    connection.execute(
-        "UPDATE cell SET status = 'queued', queued_at = ?, error = NULL, progress_json = NULL WHERE id = ?",
-        (_now(), cell_id),
-    )
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        cell = get_cell(connection, cell_id)
+        if cell["status"] not in RUNNABLE_CELL_STATUSES:
+            raise Conflict(f"cell {cell_id} is {cell['status']}; it cannot be started now")
+        connection.execute("INSERT INTO cell_queue (cell_id) VALUES (?)", (cell_id,))
+        connection.execute(
+            "UPDATE cell SET status = 'queued', queued_at = ?, pid = NULL, error = NULL, progress_json = NULL WHERE id = ?",
+            (_now(), cell_id),
+        )
+        connection.execute("COMMIT")
+    except Exception:
+        connection.execute("ROLLBACK")
+        raise
     return get_cell(connection, cell_id)
+
+
+def next_queued_cell_id(connection: sqlite3.Connection) -> int | None:
+    row = connection.execute(
+        """SELECT c.id FROM cell_queue AS q
+           JOIN cell AS c ON c.id = q.cell_id
+           WHERE c.status = 'queued' ORDER BY q.position LIMIT 1"""
+    ).fetchone()
+    return row["id"] if row is not None else None
+
+
+def startable_queued_cell_ids(
+    connection: sqlite3.Connection, blocked_urls: set[str] | None = None
+) -> list[int]:
+    """Oldest queued Cell for each URL that has no running Cell."""
+    busy_urls = set(blocked_urls or ())
+    busy_urls.update(
+        row["router_url"]
+        for row in connection.execute(
+            """SELECT DISTINCT d.router_url FROM cell AS c
+               JOIN deployment AS d ON d.id = c.deployment_id
+               WHERE c.status = 'running'"""
+        )
+    )
+    startable = []
+    for row in connection.execute(
+        """SELECT c.id, d.router_url FROM cell_queue AS q
+           JOIN cell AS c ON c.id = q.cell_id
+           JOIN deployment AS d ON d.id = c.deployment_id
+           WHERE c.status = 'queued' ORDER BY q.position"""
+    ):
+        if row["router_url"] not in busy_urls:
+            startable.append(row["id"])
+            busy_urls.add(row["router_url"])
+    return startable
 
 
 def set_cell_status(
@@ -1026,6 +1169,7 @@ def set_cell_status(
     error: str | None = None,
     artifact_dir: str | None = None,
     pid: int | None = None,
+    expected_pid: int | None = None,
 ) -> bool:
     """Backend-owned. The executor never calls this.
 
@@ -1043,20 +1187,36 @@ def set_cell_status(
     guard = ""
     if status in TERMINAL_STATUSES:
         guard = " AND status NOT IN ('completed', 'failed', 'cancelled')"
+    if expected_pid is not None:
+        guard += " AND status = 'running' AND pid = ?"
 
-    cursor = connection.execute(
-        f"""
-        UPDATE cell
-           SET status = ?,
-               error = ?,
-               artifact_dir = COALESCE(?, artifact_dir),
-               pid = COALESCE(?, pid),
-               started_at = COALESCE(?, started_at),
-               finished_at = COALESCE(?, finished_at)
-         WHERE id = ?{guard}
-        """,
-        (status, error, artifact_dir, pid, started_at, finished_at, cell_id),
-    )
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        cursor = connection.execute(
+            f"""
+            UPDATE cell
+               SET status = ?,
+                   error = ?,
+                   artifact_dir = COALESCE(?, artifact_dir),
+                   pid = COALESCE(?, pid),
+                   started_at = COALESCE(?, started_at),
+                   finished_at = COALESCE(?, finished_at)
+             WHERE id = ?{guard}
+            """,
+            (status, error, artifact_dir, pid, started_at, finished_at, cell_id)
+            + ((expected_pid,) if expected_pid is not None else ()),
+        )
+        if cursor.rowcount == 1:
+            if status == "queued":
+                connection.execute(
+                    "INSERT OR IGNORE INTO cell_queue (cell_id) VALUES (?)", (cell_id,)
+                )
+            else:
+                connection.execute("DELETE FROM cell_queue WHERE cell_id = ?", (cell_id,))
+        connection.execute("COMMIT")
+    except Exception:
+        connection.execute("ROLLBACK")
+        raise
     return cursor.rowcount == 1
 
 
@@ -1091,6 +1251,7 @@ def reconcile_stale_cells(connection: sqlite3.Connection) -> int:
         connection.execute(
             "UPDATE cell SET status = 'idle', queued_at = NULL WHERE id = ?", (row["id"],)
         )
+    connection.execute("DELETE FROM cell_queue")
     return len(running) + len(queued)
 
 
@@ -1282,14 +1443,39 @@ def comparison_sections(
 
 def list_services(connection: sqlite3.Connection) -> list[dict]:
     rows = connection.execute("SELECT * FROM service ORDER BY name").fetchall()
-    return [dict(row) for row in rows]
+    return [_service_summary(dict(row)) for row in rows]
+
+
+def _inspection_case_ids() -> list[str]:
+    return [case.case_id for case in catalogue()]
+
+
+def _service_summary(service: dict) -> dict:
+    saved = service.pop("enabled_case_ids_json", None)
+    service["enabled_case_ids"] = json.loads(saved) if saved else _inspection_case_ids()
+    return service
 
 
 def get_service(connection: sqlite3.Connection, service_id: int) -> dict:
     row = connection.execute("SELECT * FROM service WHERE id = ?", (service_id,)).fetchone()
     if row is None:
         raise NotFound(f"service {service_id} does not exist")
-    return dict(row)
+    return _service_summary(dict(row))
+
+
+def set_service_inspection_cases(
+    connection: sqlite3.Connection, service_id: int, case_ids: list[str]
+) -> dict:
+    get_service(connection, service_id)
+    available = _inspection_case_ids()
+    if not case_ids or len(case_ids) != len(set(case_ids)) or set(case_ids) - set(available):
+        raise Invalid("select at least one unique, known inspection case")
+    ordered = [case_id for case_id in available if case_id in case_ids]
+    connection.execute(
+        "UPDATE service SET enabled_case_ids_json = ?, updated_at = ? WHERE id = ?",
+        (json.dumps(ordered), _now(), service_id),
+    )
+    return get_service(connection, service_id)
 
 
 def create_service(connection: sqlite3.Connection, fields: dict) -> dict:
@@ -1327,13 +1513,13 @@ def update_service(connection: sqlite3.Connection, service_id: int, changes: dic
 
 
 def create_inspection_run(connection: sqlite3.Connection, service_id: int) -> dict:
-    get_service(connection, service_id)
+    service = get_service(connection, service_id)
     cursor = connection.execute(
         """
-        INSERT INTO inspection_run (service_id, status, queued_at)
-        VALUES (?, 'queued', ?)
+        INSERT INTO inspection_run (service_id, suite_version, case_ids_json, status, queued_at)
+        VALUES (?, ?, ?, 'queued', ?)
         """,
-        (service_id, _now()),
+        (service_id, SUITE_VERSION, json.dumps(service["enabled_case_ids"]), _now()),
     )
     return get_inspection_run(connection, int(cursor.lastrowid))
 
@@ -1341,9 +1527,29 @@ def create_inspection_run(connection: sqlite3.Connection, service_id: int) -> di
 def list_inspection_runs(connection: sqlite3.Connection, service_id: int) -> list[dict]:
     get_service(connection, service_id)
     rows = connection.execute(
-        "SELECT * FROM inspection_run WHERE service_id = ? ORDER BY id DESC", (service_id,)
+        """SELECT inspection_run.*,
+                  (SELECT COUNT(*) FROM inspection_case_result
+                   WHERE inspection_run_id = inspection_run.id
+                     AND case_id != 'discovery') AS completed_cases
+             FROM inspection_run WHERE service_id = ? ORDER BY id DESC""",
+        (service_id,),
     ).fetchall()
-    return [_inspection_summary(dict(row)) for row in rows]
+    runs = []
+    for row in rows:
+        run = _inspection_summary(dict(row))
+        if row["case_ids_json"] is None:
+            run["case_ids"] = _legacy_inspection_case_ids(connection, run["id"])
+        runs.append(run)
+    return runs
+
+
+def _legacy_inspection_case_ids(connection: sqlite3.Connection, inspection_run_id: int) -> list[str]:
+    rows = connection.execute(
+        "SELECT case_id FROM inspection_case_result WHERE inspection_run_id = ? "
+        "AND case_id != 'discovery' ORDER BY ordinal",
+        (inspection_run_id,),
+    ).fetchall()
+    return [row["case_id"] for row in rows] or _inspection_case_ids()
 
 
 def get_inspection_run(connection: sqlite3.Connection, inspection_run_id: int) -> dict:
@@ -1353,20 +1559,49 @@ def get_inspection_run(connection: sqlite3.Connection, inspection_run_id: int) -
     if row is None:
         raise NotFound(f"inspection run {inspection_run_id} does not exist")
     run = _inspection_summary(dict(row))
+    if row["case_ids_json"] is None:
+        run["case_ids"] = _legacy_inspection_case_ids(connection, inspection_run_id)
     cases = connection.execute(
         "SELECT * FROM inspection_case_result WHERE inspection_run_id = ? ORDER BY ordinal",
         (inspection_run_id,),
     ).fetchall()
     run["cases"] = [
-        {**dict(case), "required": bool(case["required"])} for case in cases
+        {
+            **dict(case),
+            "required": bool(case["required"]),
+            "evidence": json.loads(case["evidence_json"] or "[]"),
+        }
+        for case in cases
     ]
+    for case in run["cases"]:
+        case.pop("evidence_json", None)
+    run["completed_cases"] = sum(
+        case["case_id"] in run["case_ids"] for case in run["cases"]
+    )
     return run
+
+
+def delete_inspection_run(connection: sqlite3.Connection, inspection_run_id: int) -> None:
+    row = connection.execute(
+        "SELECT status FROM inspection_run WHERE id = ?", (inspection_run_id,)
+    ).fetchone()
+    if row is None:
+        raise NotFound(f"inspection run {inspection_run_id} does not exist")
+    if row["status"] not in TERMINAL_STATUSES:
+        raise Conflict(f"inspection {inspection_run_id} is {row['status']}; cancel it before deleting")
+    cursor = connection.execute(
+        "DELETE FROM inspection_run WHERE id = ? AND status IN ('completed', 'failed', 'cancelled')",
+        (inspection_run_id,),
+    )
+    if cursor.rowcount != 1:
+        raise Conflict(f"inspection {inspection_run_id} changed before it could be deleted")
 
 
 def _inspection_summary(run: dict) -> dict:
     progress = run.pop("progress_json", None)
     run["progress"] = json.loads(progress) if progress else None
     run["target"] = json.loads(run.pop("target_json", None) or "null")
+    run["case_ids"] = json.loads(run.pop("case_ids_json", None) or "null") or _inspection_case_ids()
     return run
 
 
@@ -1421,14 +1656,15 @@ def record_inspection_case(
     connection.execute(
         """
         INSERT INTO inspection_case_result (
-            inspection_run_id, ordinal, case_id, required, verdict, reason_code, message
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            inspection_run_id, ordinal, case_id, required, verdict, reason_code, message, evidence_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (inspection_run_id, ordinal) DO UPDATE SET
             case_id = excluded.case_id,
             required = excluded.required,
             verdict = excluded.verdict,
             reason_code = excluded.reason_code,
-            message = excluded.message
+            message = excluded.message,
+            evidence_json = COALESCE(excluded.evidence_json, inspection_case_result.evidence_json)
         """,
         (
             inspection_run_id,
@@ -1438,6 +1674,7 @@ def record_inspection_case(
             case["verdict"],
             case["reason_code"],
             case.get("message", ""),
+            json.dumps(case["evidence"]) if "evidence" in case else None,
         ),
     )
 
