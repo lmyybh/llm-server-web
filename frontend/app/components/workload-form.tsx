@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { Button, ErrorBanner, Field, TextInput } from "./ui";
+import { Button, ErrorBanner, Field, SelectInput, TextInput } from "./ui";
 import {
   api,
   describe,
@@ -133,19 +133,13 @@ export function WorkloadForm({
         </div>
       ) : (
         <Field label="数据集" hint="来自服务端预置的数据集目录。">
-          <select
-            aria-label="数据集"
-            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+          <SelectInput
+            ariaLabel="数据集"
             value={dataset}
-            onChange={(event) => setDataset(event.target.value)}
-          >
-            <option value="">选择一个数据集…</option>
-            {datasets.map((entry) => (
-              <option key={entry.name} value={entry.name}>
-                {entry.name}
-              </option>
-            ))}
-          </select>
+            onValueChange={setDataset}
+            placeholder="选择一个数据集…"
+            options={datasets.map((entry) => ({ value: entry.name, label: entry.name }))}
+          />
         </Field>
       )}
 

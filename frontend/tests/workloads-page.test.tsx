@@ -83,7 +83,8 @@ test("a dataset workload picks from the registered datasets, not free text", asy
   await userEvent.click(await screen.findByRole("button", { name: "新建负载" }));
   await userEvent.type(screen.getByLabelText("名称"), "business-claw");
   await userEvent.click(screen.getByRole("radio", { name: "真实数据集" }));
-  await userEvent.selectOptions(await screen.findByLabelText("数据集"), "claw");
+  await userEvent.click(await screen.findByRole("combobox", { name: "数据集" }));
+  await userEvent.click(await screen.findByRole("option", { name: "claw" }));
   await userEvent.click(screen.getByRole("button", { name: "创建" }));
 
   expect(await screen.findByText("business-claw")).toBeInTheDocument();

@@ -6,7 +6,6 @@ import Link from "./components/Link";
 import { relativeTime } from "./components/cell";
 import { PencilIcon, TrashIcon } from "./components/icons";
 import {
-  Breadcrumb,
   Button,
   Empty,
   ErrorBanner,
@@ -88,8 +87,7 @@ export default function ModelsPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-col gap-2">
-        <Breadcrumb items={[{ label: "压测" }, { label: "模型" }]} />
+      <div>
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-900">模型压测</h1>

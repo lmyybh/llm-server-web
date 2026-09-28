@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import * as SelectPrimitive from "@radix-ui/react-select";
 
 import Link from "./Link";
 
@@ -70,6 +71,60 @@ export function Field({
 
 export function TextInput({ className = "", ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return <input {...props} className={`${INPUT} ${className}`} />;
+}
+
+export function SelectInput({
+  value,
+  onValueChange,
+  options,
+  placeholder = "请选择…",
+  ariaLabel,
+  disabled = false,
+  compact = false,
+  title,
+}: {
+  value: string;
+  onValueChange: (value: string) => void;
+  options: { value: string; label: string }[];
+  placeholder?: string;
+  ariaLabel: string;
+  disabled?: boolean;
+  compact?: boolean;
+  title?: string;
+}) {
+  return (
+    <SelectPrimitive.Root value={value} onValueChange={onValueChange} disabled={disabled || options.length === 0}>
+      <SelectPrimitive.Trigger
+        aria-label={ariaLabel}
+        title={title}
+        className={
+          "inline-flex max-w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white text-left text-slate-800 shadow-sm shadow-slate-900/[.025] outline-none " +
+          "focus:border-blue-400 focus:ring-4 focus:ring-blue-500/10 disabled:cursor-not-allowed disabled:opacity-50 " +
+          "dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:focus:border-blue-400 " +
+          (compact ? "py-1.5 pl-3 pr-2.5 text-base font-semibold tracking-tight" : "w-full px-3.5 py-2.5 text-sm")
+        }
+      >
+        <span className="min-w-0 truncate"><SelectPrimitive.Value placeholder={placeholder} /></span>
+        <SelectPrimitive.Icon className="shrink-0 text-slate-400">
+          <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+            <path d="m5 7.5 5 5 5-5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </SelectPrimitive.Icon>
+      </SelectPrimitive.Trigger>
+      <SelectPrimitive.Portal>
+        <SelectPrimitive.Content position="popper" sideOffset={6} className="z-[60] min-w-[var(--radix-select-trigger-width)] max-w-[min(90vw,28rem)] overflow-hidden rounded-xl border border-slate-200 bg-white p-1 shadow-xl shadow-slate-900/10 dark:border-neutral-700 dark:bg-neutral-900">
+          <SelectPrimitive.Viewport className="max-h-[min(18rem,var(--radix-select-content-available-height))]">
+            {options.map((option) => (
+              <SelectPrimitive.Item key={option.value} value={option.value} className="relative flex cursor-pointer select-none items-center rounded-lg py-2 pl-3 pr-9 text-sm text-slate-700 outline-none data-[highlighted]:bg-blue-50 data-[highlighted]:text-blue-700 dark:text-neutral-200 dark:data-[highlighted]:bg-blue-950 dark:data-[highlighted]:text-blue-300">
+                <SelectPrimitive.ItemText>{option.label}</SelectPrimitive.ItemText>
+                <SelectPrimitive.ItemIndicator className="absolute right-3 text-blue-600">✓</SelectPrimitive.ItemIndicator>
+              </SelectPrimitive.Item>
+            ))}
+          </SelectPrimitive.Viewport>
+        </SelectPrimitive.Content>
+      </SelectPrimitive.Portal>
+    </SelectPrimitive.Root>
+  );
 }
 
 export function Button({

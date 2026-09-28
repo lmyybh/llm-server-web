@@ -35,6 +35,7 @@ from .schemas import (
     ModelUpdate,
     ServiceCreate,
     ServiceUpdate,
+    SuiteInput,
     WorkloadCreate,
     WorkloadUpdate,
     deployment_field_defaults,
@@ -178,6 +179,51 @@ def update_workload(
 @router.delete("/workloads/{workload_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_workload(workload_id: int, connection: sqlite3.Connection = Connection):
     _guard(store.delete_workload, connection, workload_id)
+
+
+# --- reusable bench combinations --------------------------------------------
+
+
+@router.get("/suites")
+def list_suites(connection: sqlite3.Connection = Connection) -> list[dict]:
+    return store.list_suites(connection)
+
+
+@router.post("/suites", status_code=status.HTTP_201_CREATED)
+def create_suite(payload: SuiteInput, connection: sqlite3.Connection = Connection) -> dict:
+    return _guard(store.create_suite, connection, payload.model_dump())
+
+
+@router.get("/suites/{suite_id}")
+def get_suite(suite_id: int, connection: sqlite3.Connection = Connection) -> dict:
+    return _guard(store.get_suite, connection, suite_id)
+
+
+@router.put("/suites/{suite_id}")
+def update_suite(
+    suite_id: int, payload: SuiteInput, connection: sqlite3.Connection = Connection
+) -> dict:
+    return _guard(store.update_suite, connection, suite_id, payload.model_dump())
+
+
+@router.delete("/suites/{suite_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_suite(suite_id: int, connection: sqlite3.Connection = Connection):
+    _guard(store.delete_suite, connection, suite_id)
+
+
+@router.post("/deployments/{deployment_id}/suites/{suite_id}/import")
+def import_suite(
+    deployment_id: int, suite_id: int, connection: sqlite3.Connection = Connection
+) -> dict:
+    suite = _guard(store.get_suite, connection, suite_id)
+    for workload_id in {cell["workload_id"] for cell in suite["cells"]}:
+        workload = _guard(store.get_workload, connection, workload_id)
+        if workload["kind"] == "dataset":
+            try:
+                datasets.load(workload["dataset"])
+            except DatasetError as exc:
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return _guard(store.import_suite, connection, deployment_id, suite_id)
 
 
 # --- deployment ↔ workload attachments ---------------------------------------

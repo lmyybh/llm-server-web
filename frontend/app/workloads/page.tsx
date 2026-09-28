@@ -110,7 +110,7 @@ export default function WorkloadsPage() {
                       ) : null}
                       <span className="text-xs text-neutral-400 dark:text-neutral-500">
                         被 {workload.cell_count ?? 0} 个 Cell · {workload.deployment_count ?? 0}{" "}
-                        个部署方式引用
+                        个部署方式 · {workload.suite_count ?? 0} 个压测组合引用
                       </span>
                     </>
                   )}
@@ -138,7 +138,7 @@ export default function WorkloadsPage() {
         >
           <div className="flex flex-col gap-4">
             <p className="text-sm text-neutral-600 dark:text-neutral-300">
-              确认从负载库删除此负载？已被部署方式或测试项引用的负载需要先移除引用。
+              确认从负载库删除此负载？已被部署方式、测试项或压测组合引用的负载需要先移除引用。
             </p>
             <ErrorBanner message={deleteError} />
             <div className="flex justify-end gap-2">

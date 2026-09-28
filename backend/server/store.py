@@ -13,7 +13,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS model (
@@ -122,6 +122,27 @@ CREATE TABLE IF NOT EXISTS cell (
 
 CREATE INDEX IF NOT EXISTS cell_deployment_idx ON cell (deployment_id, id);
 CREATE INDEX IF NOT EXISTS cell_workload_idx ON cell (workload_id);
+
+-- Reusable Cell configurations. A combination does not own run results; an
+-- import copies missing configurations into a Deployment.
+CREATE TABLE IF NOT EXISTS bench_suite (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL UNIQUE,
+    note       TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS bench_suite_cell (
+    suite_id     INTEGER NOT NULL REFERENCES bench_suite(id) ON DELETE CASCADE,
+    workload_id  INTEGER NOT NULL REFERENCES workload(id),
+    mode         TEXT NOT NULL,
+    level        REAL NOT NULL,
+    num_requests INTEGER NOT NULL,
+    PRIMARY KEY (suite_id, workload_id, mode, level)
+);
+
+CREATE INDEX IF NOT EXISTS bench_suite_cell_workload_idx ON bench_suite_cell (workload_id);
 
 -- Inspection is a separate system with its own entities. It shares no table
 -- with bench: a Service is not a Deployment, and an Inspection Run is not a
@@ -466,6 +487,8 @@ def list_workloads(connection: sqlite3.Connection) -> list[dict]:
         """
         SELECT w.*,
                (SELECT COUNT(*) FROM cell c WHERE c.workload_id = w.id) AS cell_count,
+               (SELECT COUNT(DISTINCT sc.suite_id) FROM bench_suite_cell sc
+                 WHERE sc.workload_id = w.id) AS suite_count,
                (SELECT COUNT(*) FROM (
                    SELECT c.deployment_id FROM cell c WHERE c.workload_id = w.id
                    UNION
@@ -533,6 +556,11 @@ def update_workload(connection: sqlite3.Connection, workload_id: int, changes: d
 
 def delete_workload(connection: sqlite3.Connection, workload_id: int) -> None:
     get_workload(connection, workload_id)
+    in_suites = connection.execute(
+        "SELECT COUNT(*) FROM bench_suite_cell WHERE workload_id = ?", (workload_id,)
+    ).fetchone()[0]
+    if in_suites:
+        raise Conflict(f"workload {workload_id} is used by {in_suites} combination cell(s)")
     referenced = connection.execute(
         "SELECT COUNT(*) AS count FROM cell WHERE workload_id = ?", (workload_id,)
     ).fetchone()["count"]
@@ -551,6 +579,147 @@ def delete_workload(connection: sqlite3.Connection, workload_id: int) -> None:
             "remove it there first"
         )
     connection.execute("DELETE FROM workload WHERE id = ?", (workload_id,))
+
+
+# --- reusable bench combinations --------------------------------------------
+
+
+def _suite(connection: sqlite3.Connection, row: sqlite3.Row) -> dict:
+    suite = dict(row)
+    suite["cells"] = [dict(item) for item in connection.execute(
+        """SELECT workload_id, mode, level, num_requests
+             FROM bench_suite_cell WHERE suite_id = ?
+             ORDER BY workload_id, mode, level""",
+        (suite["id"],),
+    ).fetchall()]
+    return suite
+
+
+def list_suites(connection: sqlite3.Connection) -> list[dict]:
+    rows = connection.execute("SELECT * FROM bench_suite ORDER BY name").fetchall()
+    return [_suite(connection, row) for row in rows]
+
+
+def get_suite(connection: sqlite3.Connection, suite_id: int) -> dict:
+    row = connection.execute("SELECT * FROM bench_suite WHERE id = ?", (suite_id,)).fetchone()
+    if row is None:
+        raise NotFound(f"combination {suite_id} does not exist")
+    return _suite(connection, row)
+
+
+def _validate_suite_workloads(connection: sqlite3.Connection, cells: list[dict]) -> None:
+    for workload_id in {cell["workload_id"] for cell in cells}:
+        get_workload(connection, workload_id)
+
+
+def _insert_suite_cells(connection: sqlite3.Connection, suite_id: int, cells: list[dict]) -> None:
+    connection.executemany(
+        """INSERT INTO bench_suite_cell
+           (suite_id, workload_id, mode, level, num_requests) VALUES (?, ?, ?, ?, ?)""",
+        [(suite_id, cell["workload_id"], cell["mode"], cell["level"], cell["num_requests"])
+         for cell in cells],
+    )
+
+
+def create_suite(connection: sqlite3.Connection, fields: dict) -> dict:
+    _validate_suite_workloads(connection, fields["cells"])
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        now = _now()
+        cursor = connection.execute(
+            "INSERT INTO bench_suite (name, note, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (fields["name"], fields.get("note", ""), now, now),
+        )
+        suite_id = int(cursor.lastrowid)
+        _insert_suite_cells(connection, suite_id, fields["cells"])
+    except sqlite3.IntegrityError as exc:
+        connection.rollback()
+        raise Conflict(f"a combination named {fields['name']!r} already exists") from exc
+    except Exception:
+        connection.rollback()
+        raise
+    connection.commit()
+    return get_suite(connection, suite_id)
+
+
+def update_suite(connection: sqlite3.Connection, suite_id: int, fields: dict) -> dict:
+    get_suite(connection, suite_id)
+    _validate_suite_workloads(connection, fields["cells"])
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        connection.execute(
+            "UPDATE bench_suite SET name = ?, note = ?, updated_at = ? WHERE id = ?",
+            (fields["name"], fields.get("note", ""), _now(), suite_id),
+        )
+        connection.execute("DELETE FROM bench_suite_cell WHERE suite_id = ?", (suite_id,))
+        _insert_suite_cells(connection, suite_id, fields["cells"])
+    except sqlite3.IntegrityError as exc:
+        connection.rollback()
+        raise Conflict(f"a combination named {fields['name']!r} already exists") from exc
+    except Exception:
+        connection.rollback()
+        raise
+    connection.commit()
+    return get_suite(connection, suite_id)
+
+
+def delete_suite(connection: sqlite3.Connection, suite_id: int) -> None:
+    get_suite(connection, suite_id)
+    connection.execute("DELETE FROM bench_suite WHERE id = ?", (suite_id,))
+
+
+def import_suite(connection: sqlite3.Connection, deployment_id: int, suite_id: int) -> dict:
+    deployment = get_deployment(connection, deployment_id)
+    suite = get_suite(connection, suite_id)
+    workloads = {cell["workload_id"]: get_workload(connection, cell["workload_id"])
+                 for cell in suite["cells"]}
+    for workload in workloads.values():
+        if workload["kind"] == "synthetic":
+            for field in ("input_tokens", "output_tokens"):
+                if workload[field] > deployment["synthetic_input_limit"]:
+                    raise Invalid(
+                        f"workload {workload['name']} {field} exceeds this deployment's "
+                        "synthetic_input_limit"
+                    )
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        existing = {
+            (row["workload_id"], row["mode"], row["level"])
+            for row in connection.execute(
+                "SELECT workload_id, mode, level FROM cell WHERE deployment_id = ?",
+                (deployment_id,),
+            ).fetchall()
+        }
+        attached = 0
+        for workload_id in workloads:
+            cursor = connection.execute(
+                """INSERT OR IGNORE INTO deployment_workload
+                   (deployment_id, workload_id, created_at) VALUES (?, ?, ?)""",
+                (deployment_id, workload_id, _now()),
+            )
+            attached += cursor.rowcount
+        created = 0
+        for cell in suite["cells"]:
+            key = (cell["workload_id"], cell["mode"], cell["level"])
+            if key in existing:
+                continue
+            connection.execute(
+                """INSERT INTO cell
+                   (deployment_id, workload_id, mode, level, num_requests, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (deployment_id, *key, cell["num_requests"], _now()),
+            )
+            created += 1
+    except Exception:
+        connection.rollback()
+        raise
+    connection.commit()
+    return {
+        "created_cells": created,
+        "skipped_cells": len(suite["cells"]) - created,
+        "attached_workloads": attached,
+    }
 
 
 # --- deployment ↔ workload attachments ---------------------------------------

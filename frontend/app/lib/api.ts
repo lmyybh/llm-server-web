@@ -110,6 +110,7 @@ export type Workload = {
   dataset: string | null;
   cell_count?: number;
   deployment_count?: number;
+  suite_count?: number;
   created_at: string;
   /** Present when listed under a Deployment: when it was added to that Deployment. */
   added_at?: string;
@@ -118,6 +119,30 @@ export type Workload = {
 export type WorkloadInput =
   | { name: string; note?: string; kind: "synthetic"; input_tokens: number; output_tokens: number }
   | { name: string; note?: string; kind: "dataset"; dataset: string };
+
+export type SuiteCell = {
+  workload_id: number;
+  mode: CellMode;
+  level: number;
+  num_requests: number;
+};
+
+export type BenchSuite = {
+  id: number;
+  name: string;
+  note: string;
+  cells: SuiteCell[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type SuiteInput = Pick<BenchSuite, "name" | "note" | "cells">;
+
+export type SuiteImportResult = {
+  created_cells: number;
+  skipped_cells: number;
+  attached_workloads: number;
+};
 
 // --- cells -------------------------------------------------------------------
 //
@@ -183,8 +208,7 @@ export type Cell = {
   input_token_throughput: number | null;
   output_token_throughput: number | null;
   metric_summaries: Partial<Record<
-    "ttft_ms" | "tpot_ms" | "e2e_ms" | "input_tokens" | "output_tokens" |
-    "request_throughput" | "input_token_throughput" | "output_token_throughput",
+    "ttft_ms" | "tpot_ms" | "e2e_ms" | "input_tokens" | "output_tokens",
     { mean: number | null; p50: number | null; p70: number | null; p95: number | null; p99: number | null }
   >> | null;
   ttft_p50: number | null;
@@ -466,6 +490,17 @@ export const api = {
   updateWorkload: (id: number, payload: { name?: string; note?: string }) =>
     request<Workload>(`/api/workloads/${id}`, { method: "PATCH", ...body(payload) }),
   deleteWorkload: (id: number) => request<void>(`/api/workloads/${id}`, { method: "DELETE" }),
+
+  listSuites: () => request<BenchSuite[]>("/api/suites"),
+  createSuite: (payload: SuiteInput) =>
+    request<BenchSuite>("/api/suites", { method: "POST", ...body(payload) }),
+  updateSuite: (id: number, payload: SuiteInput) =>
+    request<BenchSuite>(`/api/suites/${id}`, { method: "PUT", ...body(payload) }),
+  deleteSuite: (id: number) => request<void>(`/api/suites/${id}`, { method: "DELETE" }),
+  importSuite: (deploymentId: number, suiteId: number) =>
+    request<SuiteImportResult>(`/api/deployments/${deploymentId}/suites/${suiteId}/import`, {
+      method: "POST",
+    }),
 
   listCells: (deploymentId: number) => request<Cell[]>(`/api/deployments/${deploymentId}/cells`),
   listDeploymentWorkloads: (deploymentId: number) =>

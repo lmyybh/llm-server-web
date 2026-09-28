@@ -3,6 +3,7 @@
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import Link from "../../components/Link";
 import {
   CellStatusDot,
   MODE_LABELS,
@@ -11,32 +12,25 @@ import {
   workloadShape,
 } from "../../components/cell";
 import { CellReport } from "../../components/cell-report";
+import { CellLadderForm } from "../../components/cell-ladder-form";
+import { WorkloadCardFrame } from "../../components/workload-card-frame";
+import { AddWorkloadForm } from "../../components/add-workload-form";
+import { ADD_PANEL_TITLES, WorkloadModePanel } from "../../components/workload-mode-panel";
 import { WorkloadReport } from "../../components/workload-report";
-import { Breadcrumb, Button, Empty, ErrorBanner, Field, IconButton, Modal, TextInput } from "../../components/ui";
+import { Breadcrumb, Button, Empty, ErrorBanner, Field, IconButton, Modal, SelectInput, TextInput } from "../../components/ui";
 import { EllipsisIcon, PlayIcon, ReportIcon, RotateCcwIcon, StopIcon, TrashIcon } from "../../components/icons";
-import { WorkloadForm } from "../../components/workload-form";
-import { parseLevels } from "../../lib/levels";
 import {
   api,
   describe,
   type Cell,
   type CellMode,
+  type BenchSuite,
   type Deployment,
-  type Estimate,
   type Model,
   type Workload,
-  type WorkloadInput,
 } from "../../lib/api";
 
-const DEFAULT_REQUESTS = "64";
-const ESTIMATE_DEBOUNCE_MS = 400;
 const POLL_INTERVAL_MS = 1500;
-
-function formatDuration(seconds: number): string {
-  if (seconds < 90) return `${Math.round(seconds)} 秒`;
-  if (seconds < 5400) return `${Math.round(seconds / 60)} 分钟`;
-  return `${(seconds / 3600).toFixed(1)} 小时`;
-}
 
 export default function DeploymentPage() {
   const params = useParams<{ id: string }>();
@@ -55,6 +49,7 @@ export default function DeploymentPage() {
     initial?: { mode: CellMode; levels: string; requests: string };
   } | null>(null);
   const [addingWorkload, setAddingWorkload] = useState(false);
+  const [importingSuite, setImportingSuite] = useState(false);
 
   useEffect(() => {
     if (toast === null) return;
@@ -116,13 +111,16 @@ export default function DeploymentPage() {
         ]}
       />
 
-      <div>
-        <h1 className="text-lg font-semibold">{deployment?.name ?? "…"}</h1>
-        {deployment ? (
-          <p className="mt-1 font-mono text-sm text-neutral-500 dark:text-neutral-400">
-            {deployment.router_url} · {deployment.model_name}
-          </p>
-        ) : null}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-lg font-semibold">{deployment?.name ?? "…"}</h1>
+          {deployment ? (
+            <p className="mt-1 font-mono text-sm text-neutral-500 dark:text-neutral-400">
+              {deployment.router_url} · {deployment.model_name}
+            </p>
+          ) : null}
+        </div>
+        <Button variant="ghost" disabled={!deployment} onClick={() => setImportingSuite(true)}>导入压测组合</Button>
       </div>
 
       <ErrorBanner message={error} />
@@ -189,14 +187,24 @@ export default function DeploymentPage() {
       {addingWorkload && attached !== null ? (
         <Modal title="添加负载" onClose={() => setAddingWorkload(false)}>
           <AddWorkloadForm
-            deploymentId={deploymentId}
             addedIds={new Set(attached.map((workload) => workload.id))}
-            onAttached={async () => {
+            onAdded={async (workload) => {
+              await api.attachWorkload(deploymentId, workload.id);
               setAddingWorkload(false);
               await refresh();
             }}
             onClose={() => setAddingWorkload(false)}
           />
+        </Modal>
+      ) : null}
+
+      {importingSuite ? (
+        <Modal title="导入压测组合" className="max-w-lg" onClose={() => setImportingSuite(false)}>
+          <ImportSuiteForm deploymentId={deploymentId} onClose={() => setImportingSuite(false)} onImported={async (created, skipped) => {
+            setImportingSuite(false);
+            setToast(`已导入 ${created} 个测试项${skipped ? `，跳过 ${skipped} 个已有项` : ""}`);
+            await refresh();
+          }} />
         </Modal>
       ) : null}
 
@@ -207,7 +215,6 @@ export default function DeploymentPage() {
           onClose={() => setCellForm(null)}
         >
           <CellLadderForm
-            deploymentId={deploymentId}
             workloadId={cellForm.workloadId}
             fixedMode={cellForm.mode}
             initial={cellForm.initial}
@@ -221,6 +228,8 @@ export default function DeploymentPage() {
                 .filter((cell) => cell.workload_id === cellForm.workloadId && cell.mode === "qps")
                 .map((cell) => cell.level),
             }}
+            onCreate={async (payload) => (await api.createCells(deploymentId, payload)).length}
+            onEstimate={(payload) => api.estimateCells(deploymentId, payload)}
             onCreated={async (created) => {
               setCellForm(null);
               setToast(`已添加 ${created} 个测试`);
@@ -240,6 +249,69 @@ export default function DeploymentPage() {
       ) : null}
     </div>
   );
+}
+
+function ImportSuiteForm({ deploymentId, onClose, onImported }: {
+  deploymentId: number;
+  onClose: () => void;
+  onImported: (created: number, skipped: number) => Promise<void>;
+}) {
+  const [suites, setSuites] = useState<BenchSuite[] | null>(null);
+  const [workloads, setWorkloads] = useState<Workload[]>([]);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    Promise.all([api.listSuites(), api.listWorkloads()]).then(([loadedSuites, loadedWorkloads]) => {
+      setSuites(loadedSuites);
+      setWorkloads(loadedWorkloads);
+      setSelectedId(loadedSuites[0]?.id ?? null);
+    }).catch((caught) => setError(describe(caught)));
+  }, []);
+
+  const selected = suites?.find((suite) => suite.id === selectedId);
+
+  async function importSelected() {
+    if (selectedId === null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api.importSuite(deploymentId, selectedId);
+      await onImported(result.created_cells, result.skipped_cells);
+    } catch (caught) {
+      setError(describe(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div className="flex flex-col gap-4">
+    <ErrorBanner message={error} />
+    {suites === null ? <p className="text-sm text-slate-500">加载中…</p> : suites.length === 0 ? (
+      <p className="text-sm text-slate-500">还没有压测组合。前往 <Link href="/suites" className="font-medium text-blue-600 hover:underline">配置管理</Link> 创建。</p>
+    ) : <>
+      <Field label="选择组合">
+        <SelectInput ariaLabel="选择组合" value={selectedId === null ? "" : String(selectedId)} onValueChange={(value) => setSelectedId(Number(value))} options={suites.map((suite) => ({ value: String(suite.id), label: suite.name }))} />
+      </Field>
+      {selected ? <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm">
+        <p className="font-medium">{selected.cells.length} 个测试项 · {new Set(selected.cells.map((cell) => cell.workload_id)).size} 个负载</p>
+        {selected.note ? <p className="mt-1 text-slate-500">{selected.note}</p> : null}
+        <div className="mt-3 max-h-40 space-y-1 overflow-y-auto border-t border-slate-200 pt-3 text-xs">
+          {Array.from(new Set(selected.cells.map((cell) => cell.workload_id))).map((workloadId) => {
+            const name = workloads.find((workload) => workload.id === workloadId)?.name ?? `负载 #${workloadId}`;
+            const cells = selected.cells.filter((cell) => cell.workload_id === workloadId);
+            return <p key={workloadId} className="flex justify-between gap-2"><span className="font-medium">{name}</span><span className="text-slate-500">{cells.map((cell) => `${cell.mode === "qps" ? "QPS" : "并发"} ${cell.level}`).join(" · ")}</span></p>;
+          })}
+        </div>
+        <p className="mt-2 text-xs text-slate-500">已有相同负载、模式和档位的测试项会跳过，原配置与结果保持不变。</p>
+      </div> : null}
+    </>}
+    <div className="flex justify-end gap-2">
+      <Button variant="ghost" disabled={busy} onClick={onClose}>取消</Button>
+      <Button disabled={busy || selectedId === null} onClick={() => void importSelected()}>导入组合</Button>
+    </div>
+  </div>;
 }
 
 /**
@@ -323,348 +395,6 @@ function mergeGroups(cells: Cell[], attached: Workload[]): WorkloadGroup[] {
 }
 
 /**
- * Adding a Workload to a Deployment is just picking it from the library — the
- * bench configuration (mode, levels, request count) belongs to the Cell and
- * happens per card afterwards. A shape the library does not have yet can be
- * created inline, without leaving the dialog.
- */
-function AddWorkloadForm({
-  deploymentId,
-  addedIds,
-  onAttached,
-  onClose,
-}: {
-  deploymentId: number;
-  addedIds: Set<number>;
-  onAttached: () => Promise<void>;
-  onClose: () => void;
-}) {
-  const [library, setLibrary] = useState<Workload[] | null>(null);
-  const [pickedId, setPickedId] = useState<number | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    void api
-      .listWorkloads()
-      .then(setLibrary)
-      .catch((caught) => setError(describe(caught)));
-  }, []);
-
-  const available = (library ?? []).filter((workload) => !addedIds.has(workload.id));
-
-  useEffect(() => {
-    if (pickedId === null && available.length > 0) {
-      setPickedId(available[0].id);
-    }
-  }, [available, pickedId]);
-
-  async function attach() {
-    if (pickedId === null) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await api.attachWorkload(deploymentId, pickedId);
-      await onAttached();
-    } catch (caught) {
-      setError(describe(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function createAndAttach(payload: WorkloadInput) {
-    const created = await api.createWorkload(payload);
-    await api.attachWorkload(deploymentId, created.id);
-    await onAttached();
-  }
-
-  if (library === null) {
-    return <p className="text-sm text-neutral-500 dark:text-neutral-400">加载中…</p>;
-  }
-
-  if (creating || available.length === 0) {
-    return (
-      <div className="flex flex-col gap-3">
-        {available.length > 0 ? (
-          <button
-            type="button"
-            className="self-start text-sm text-neutral-500 underline dark:text-neutral-400"
-            onClick={() => setCreating(false)}
-          >
-            从负载库选择
-          </button>
-        ) : (
-          <p className="text-sm text-neutral-500 dark:text-neutral-400">
-            负载库里还没有任何负载，先新建一个。
-          </p>
-        )}
-        <WorkloadForm
-          submitLabel="创建并添加"
-          onSubmit={createAndAttach}
-          onCancel={available.length > 0 ? () => setCreating(false) : onClose}
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      <ErrorBanner message={error} />
-      <Field label="负载" hint="添加后，在并发测试或 QPS 测试面板中配置。">
-        <select
-          aria-label="负载"
-          className="w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-900"
-          value={pickedId ?? ""}
-          onChange={(event) => setPickedId(Number(event.target.value))}
-        >
-          {available.map((workload) => (
-            <option key={workload.id} value={workload.id}>
-              {workload.name}（{workloadShape(workload)}）
-            </option>
-          ))}
-        </select>
-      </Field>
-      <div className="flex items-center justify-between gap-3">
-        <button
-          type="button"
-          className="text-sm text-neutral-500 underline dark:text-neutral-400"
-          onClick={() => setCreating(true)}
-        >
-          库里没有？新建一个
-        </button>
-        <Button onClick={() => void attach()} disabled={pickedId === null || busy}>
-          添加
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-/**
- * The ladder form inside the create dialog: one mode (picked by radio), a
- * comma-separated ladder of levels, and request counts. A single count
- * broadcasts across the ladder; several counts must pair with the levels
- * one-to-one.
- */
-function CellLadderForm({
-  deploymentId,
-  workloadId,
-  existingLevels,
-  fixedMode,
-  initial,
-  onCreated,
-}: {
-  deploymentId: number;
-  workloadId: number;
-  /** Levels this (workload, mode) already has — excluded from the batch. */
-  existingLevels: Record<CellMode, number[]>;
-  /** A panel's add action creates Cells only in that panel's mode. */
-  fixedMode?: CellMode;
-  /** 「复制」预填的来源测试项配置。 */
-  initial?: { mode: CellMode; levels: string; requests: string };
-  onCreated: (created: number) => Promise<void>;
-}) {
-  const [mode, setMode] = useState<CellMode>(fixedMode ?? initial?.mode ?? "concurrency");
-  const [levelsText, setLevelsText] = useState(initial?.levels ?? "");
-  const [requestsText, setRequestsText] = useState(initial?.requests ?? DEFAULT_REQUESTS);
-  const [estimate, setEstimate] = useState<Estimate | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const parsedLevels = useMemo(() => parseLevels(levelsText), [levelsText]);
-  const parsedRequests = useMemo(() => parseLevels(requestsText), [requestsText]);
-
-  // Concurrency is a count of permits; fractional levels or counts are
-  // rejected here and by the server, never silently truncated.
-  const fractionalLevels = parsedLevels.levels.filter((level) => !Number.isInteger(level));
-  const fractionalCounts = parsedRequests.levels.filter((count) => !Number.isInteger(count));
-  const usableLevels =
-    mode === "concurrency"
-      ? parsedLevels.levels.filter((level) => Number.isInteger(level))
-      : parsedLevels.levels;
-  const counts = parsedRequests.levels.filter((count) => Number.isInteger(count));
-
-  const levelProblems = [
-    ...parsedLevels.invalid.map((token) => `无法识别的档位：${token}`),
-    ...(mode === "concurrency"
-      ? fractionalLevels.map((level) => `并发档位必须是整数：${level}`)
-      : []),
-  ];
-  const requestProblems = [
-    ...parsedRequests.invalid.map((token) => `无法识别的数量：${token}`),
-    ...fractionalCounts.map((count) => `请求数量必须是整数：${count}`),
-  ];
-  if (counts.length > 1 && counts.length !== usableLevels.length) {
-    requestProblems.push(
-      `请求数量与档位数量不一致：${counts.length} 个数量 vs ${usableLevels.length} 个档位——填一个表示所有档位共用，或与档位一一对应`,
-    );
-  }
-
-  // Pair levels with counts first, then drop the pairs whose level already
-  // exists — pairing is positional, so filtering must not shift it.
-  const broadcast = counts.length === 1 ? usableLevels.map(() => counts[0]) : counts;
-  const pairs = usableLevels.map((level, index) => ({ level, requests: broadcast[index] }));
-  const newPairs = pairs.filter((pair) => !existingLevels[mode].includes(pair.level));
-  const dupeLevels = pairs
-    .map((pair) => pair.level)
-    .filter((level) => existingLevels[mode].includes(level));
-  // A single count stays single on the wire — broadcasting is the server's
-  // documented semantics, not something the form should pre-expand.
-  const payloadCounts =
-    counts.length === 1 ? counts : newPairs.map((pair) => pair.requests);
-  const payloadLevels = newPairs.map((pair) => pair.level);
-
-  const ready =
-    newPairs.length > 0 && levelProblems.length === 0 && requestProblems.length === 0;
-
-  // A live estimate, debounced: the number should move as the ladder is typed,
-  // without one request per keystroke.
-  useEffect(() => {
-    if (!ready) {
-      setEstimate(null);
-      return;
-    }
-    const timer = setTimeout(() => {
-      api
-        .estimateCells(deploymentId, {
-          workload_id: workloadId,
-          mode,
-          levels: payloadLevels,
-          num_requests: payloadCounts,
-        })
-        .then(setEstimate)
-        .catch(() => setEstimate(null));
-    }, ESTIMATE_DEBOUNCE_MS);
-    return () => clearTimeout(timer);
-  }, [deploymentId, workloadId, mode, payloadLevels, payloadCounts, ready]);
-
-  async function create() {
-    if (!ready) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const created = await api.createCells(deploymentId, {
-        workload_id: workloadId,
-        mode,
-        levels: payloadLevels,
-        num_requests: payloadCounts,
-      });
-      await onCreated(created.length);
-    } catch (caught) {
-      setError(describe(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="flex flex-col gap-3">
-      <ErrorBanner message={error} />
-      <div className="flex flex-col gap-3">
-        {fixedMode === undefined ? (
-          <Field label="模式">
-            <div className="flex gap-3" role="radiogroup" aria-label="模式">
-              {(Object.keys(MODE_LABELS) as CellMode[]).map((value) => (
-                <label key={value} className="flex items-center gap-1 text-sm">
-                  <input
-                    type="radio"
-                    name="cell-mode"
-                    checked={mode === value}
-                    onChange={() => setMode(value)}
-                  />
-                  {MODE_LABELS[value]}
-                </label>
-              ))}
-            </div>
-          </Field>
-        ) : null}
-        <LadderField
-          label={mode === "qps" ? "QPS 档位（逗号分隔）" : "并发档位（逗号分隔）"}
-          ariaLabel="档位"
-          hint="每个档位展开成一个 Cell。"
-          value={levelsText}
-          onChange={setLevelsText}
-          placeholder={mode === "qps" ? "例如 0.5, 1, 2, 4" : "例如 1, 4, 16, 64"}
-          problems={levelProblems}
-          duplicates={dupeLevels}
-        />
-        <LadderField
-          label="请求数量（逗号分隔）"
-          ariaLabel="请求数量"
-          hint="填一个表示所有档位共用；填多个则与档位一一对应。"
-          value={requestsText}
-          onChange={setRequestsText}
-          placeholder="例如 64，或 32, 64, 128"
-          problems={requestProblems}
-          duplicates={[]}
-        />
-      </div>
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-xs text-neutral-500 dark:text-neutral-400">
-          {estimate
-            ? `预计 ${formatDuration(estimate.estimated_seconds)}（${estimate.cell_count} 个 Cell · 共 ${estimate.request_count} 个请求${
-                estimate.latency_is_estimated ? "，时延为估计值" : ""
-              }）`
-            : "预热固定为 5 个请求，执行前自动清空缓存。"}
-        </p>
-        <Button onClick={() => void create()} disabled={!ready || busy}>
-          创建 Cell
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-/**
- * One list input with its diagnostics: unusable input blocks submission
- * (silently dropping it is how a ladder loses a point nobody noticed), while
- * levels the workload already has are skipped with a note instead of failing
- * the whole batch with a 409.
- */
-function LadderField({
-  label,
-  ariaLabel,
-  hint,
-  value,
-  onChange,
-  placeholder,
-  problems,
-  duplicates,
-}: {
-  label: string;
-  ariaLabel: string;
-  hint?: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-  problems: string[];
-  duplicates: number[];
-}) {
-  return (
-    <Field label={label} hint={hint}>
-      <TextInput
-        aria-label={ariaLabel}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-      />
-      {problems.map((problem) => (
-        <span key={problem} role="alert" className="text-xs text-red-700 dark:text-red-400">
-          {problem}
-        </span>
-      ))}
-      {duplicates.length > 0 ? (
-        <span className="text-xs text-neutral-400 dark:text-neutral-500">
-          已存在：{duplicates.join(", ")}（不会重复创建）
-        </span>
-      ) : null}
-    </Field>
-  );
-}
-
-/**
  * One Workload as a responsive card: header (name, shape, actions), then
  * side-by-side concurrency and QPS panels. Empty modes keep their panel and
  * show a placeholder so the layout stays predictable while configuring.
@@ -692,9 +422,7 @@ function WorkloadCard({
   }));
 
   return (
-    <li
-      className="workload-card flex min-w-0 flex-col gap-4 rounded-[18px] border border-neutral-200 bg-white p-4 shadow-sm [container-type:inline-size] dark:border-neutral-800 dark:bg-neutral-900"
-    >
+    <WorkloadCardFrame>
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <h2
@@ -771,30 +499,13 @@ function WorkloadCard({
           </div>
         </Modal>
       ) : null}
-    </li>
+    </WorkloadCardFrame>
   );
 }
 
-const PANEL_TITLES: Record<CellMode, string> = {
-  concurrency: "并发测试",
-  qps: "QPS 测试",
-};
-
-const ADD_PANEL_TITLES: Record<CellMode, string> = {
-  concurrency: "添加并发测试",
-  qps: "添加 QPS 测试",
-};
-
-/**
- * One mode panel: title, batch action, compact Cell rows, and an add action
- * bound to this mode. Results open in a dialog via 查看结果.
- */
+/** One mode panel: shared card shell with live Cell actions. */
 function ModePanel({
-  mode,
-  cells,
-  onAdd,
-  onAction,
-  onDuplicate,
+  mode, cells, onAdd, onAction, onDuplicate,
 }: {
   mode: CellMode;
   cells: Cell[];
@@ -802,68 +513,22 @@ function ModePanel({
   onAction: (action: () => Promise<unknown>, toast?: string) => Promise<void>;
   onDuplicate: (cell: Cell) => void;
 }) {
-  // 全部重跑 = 所有不在队列里、也不在执行的。已完成项的旧结果会被覆盖。
-  const runnable = cells.filter(
-    (cell) => cell.status !== "queued" && cell.status !== "running",
-  );
-  return (
-    <section className="card-mode-panel flex min-w-0 flex-col gap-3">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="flex items-center gap-1.5 text-sm font-medium">
-          {PANEL_TITLES[mode]}
-          <span className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs tabular-nums text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-            {cells.length}
-          </span>
-        </h3>
-        <button
-          type="button"
-          className={
-            "flex items-center gap-1 rounded-md bg-green-600 px-2 py-1 " +
-            "text-xs font-medium text-white shadow-sm transition-colors hover:bg-green-700 " +
-            "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-600 " +
-            "disabled:cursor-not-allowed disabled:opacity-50 " +
-            "dark:bg-green-600 dark:hover:bg-green-500"
-          }
-          disabled={runnable.length === 0}
-          onClick={() =>
-            void onAction(
-              () => api.runCells(runnable.map((cell) => cell.id)),
-              `已将 ${runnable.length} 项加入队列`,
-            )
-          }
-        >
-          <PlayIcon />
-          Run All
-        </button>
-      </div>
-
-      {cells.length > 0 ? (
-        <ul className="flex flex-col gap-0.5">
-          {cells.map((cell) => (
-            <CellRow
-              key={cell.id}
-              cell={cell}
-              onAction={onAction}
-              onDuplicate={onDuplicate}
-            />
-          ))}
-        </ul>
-      ) : null}
-      <button
-        type="button"
-        aria-label={ADD_PANEL_TITLES[mode]}
-        onClick={onAdd}
-        className={`w-full rounded-lg border border-dashed border-neutral-300 px-2 text-center text-xs font-medium text-neutral-500 transition-colors hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 dark:border-neutral-700 dark:hover:border-blue-700 dark:hover:bg-blue-950/30 dark:hover:text-blue-300 ${
-          cells.length === 0 ? "py-5" : "py-1.5"
-        }`}
-      >
-        {cells.length === 0 ? (
-          <span className="mb-1 block font-normal text-neutral-400">暂无测试项</span>
-        ) : null}
-        ＋ {ADD_PANEL_TITLES[mode]}
-      </button>
-    </section>
-  );
+  const runnable = cells.filter((cell) => cell.status !== "queued" && cell.status !== "running");
+  return <WorkloadModePanel
+    mode={mode}
+    count={cells.length}
+    onAdd={onAdd}
+    action={<button
+      type="button"
+      className="flex items-center gap-1 rounded-md bg-green-600 px-2 py-1 text-xs font-medium text-white shadow-sm transition-colors hover:bg-green-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-green-600 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-green-600 dark:hover:bg-green-500"
+      disabled={runnable.length === 0}
+      onClick={() => void onAction(() => api.runCells(runnable.map((cell) => cell.id)), `已将 ${runnable.length} 项加入队列`)}
+    ><PlayIcon />Run All</button>}
+  >
+    {cells.length > 0 ? <ul className="flex flex-col gap-0.5">
+      {cells.map((cell) => <CellRow key={cell.id} cell={cell} onAction={onAction} onDuplicate={onDuplicate} />)}
+    </ul> : null}
+  </WorkloadModePanel>;
 }
 
 const ROW_GRID = "cell-row-grid";

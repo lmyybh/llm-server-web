@@ -265,6 +265,35 @@ class CellBatchCreate(BaseModel):
         return self.num_requests
 
 
+class SuiteCell(BaseModel):
+    workload_id: int = Field(ge=1)
+    mode: Literal["concurrency", "qps"]
+    level: float = Field(gt=0, allow_inf_nan=False)
+    num_requests: int = Field(ge=1, le=100_000)
+
+    @model_validator(mode="after")
+    def _valid_level(self) -> "SuiteCell":
+        if self.mode == "concurrency" and not self.level.is_integer():
+            raise ValueError("concurrency levels must be whole numbers")
+        return self
+
+
+class SuiteInput(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    note: str = Field(default="", max_length=2000)
+    cells: list[SuiteCell] = Field(min_length=1, max_length=512)
+
+    _strip = field_validator("name", "note")(strip_text)
+    _not_blank = field_validator("name")(require_non_blank)
+
+    @model_validator(mode="after")
+    def _unique_cells(self) -> "SuiteInput":
+        keys = [(cell.workload_id, cell.mode, cell.level) for cell in self.cells]
+        if len(keys) != len(set(keys)):
+            raise ValueError("a combination cannot contain duplicate workload/mode/level cells")
+        return self
+
+
 class CellUpdate(BaseModel):
     """``num_requests`` is the only adjustable parameter. Mode and level are
     identity — they sit in the uniqueness key, so changing them is
