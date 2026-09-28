@@ -257,10 +257,10 @@ function ModelCard({
           </Link>
         </h2>
         <div className="relative z-10 -mr-1.5 -mt-1.5 flex shrink-0 items-center gap-1">
-          <IconButton label={`编辑 ${model.name}`} onClick={onEdit}>
+          <IconButton label={`编辑 ${model.name}`} tooltip="编辑" onClick={onEdit}>
             <PencilIcon />
           </IconButton>
-          <IconButton label={`删除 ${model.name}`} danger onClick={onDelete}>
+          <IconButton label={`删除 ${model.name}`} tooltip="删除" danger onClick={onDelete}>
             <TrashIcon />
           </IconButton>
         </div>

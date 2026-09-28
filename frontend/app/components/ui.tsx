@@ -3,43 +3,57 @@
 import { useEffect } from "react";
 import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
 import * as SelectPrimitive from "@radix-ui/react-select";
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 
 import Link from "./Link";
 
 /** A quiet icon-only button for card corners; the label is for assistive tech. */
 export function IconButton({
   label,
+  tooltip = label,
   danger = false,
   tone,
   onClick,
   children,
 }: {
   label: string;
+  tooltip?: string;
   danger?: boolean;
   tone?: "blue" | "red";
   onClick: () => void;
   children: ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-      className={
-        "rounded-lg p-1.5 transition-colors " +
-        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 " +
-        (tone === "blue"
-          ? "text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:text-blue-400 dark:hover:bg-blue-950"
-          : tone === "red"
-          ? "text-red-600 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950"
-          : danger
-          ? "text-neutral-400 hover:bg-red-50 hover:text-red-600 dark:text-neutral-500 dark:hover:bg-red-950 dark:hover:text-red-400"
-          : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-200")
-      }
-    >
-      {children}
-    </button>
+    <TooltipPrimitive.Provider delayDuration={0}>
+      <TooltipPrimitive.Root>
+        <TooltipPrimitive.Trigger asChild>
+          <button
+            type="button"
+            aria-label={label}
+            onClick={onClick}
+            className={
+              "rounded-lg p-1.5 transition-colors " +
+              "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 " +
+              (tone === "blue"
+                ? "text-blue-600 hover:bg-blue-50 hover:text-blue-700 dark:text-blue-400 dark:hover:bg-blue-950"
+                : tone === "red"
+                ? "text-red-600 hover:bg-red-50 hover:text-red-700 dark:text-red-400 dark:hover:bg-red-950"
+                : danger
+                ? "text-neutral-400 hover:bg-red-50 hover:text-red-600 dark:text-neutral-500 dark:hover:bg-red-950 dark:hover:text-red-400"
+                : "text-neutral-400 hover:bg-neutral-100 hover:text-neutral-700 dark:text-neutral-500 dark:hover:bg-neutral-800 dark:hover:text-neutral-200")
+            }
+          >
+            {children}
+          </button>
+        </TooltipPrimitive.Trigger>
+        <TooltipPrimitive.Portal>
+          <TooltipPrimitive.Content side="top" sideOffset={6} className="pointer-events-none z-[70] rounded-md bg-slate-800 px-2 py-1 text-xs font-medium text-white shadow-md dark:bg-neutral-700">
+            {tooltip}
+            <TooltipPrimitive.Arrow className="fill-slate-800 dark:fill-neutral-700" />
+          </TooltipPrimitive.Content>
+        </TooltipPrimitive.Portal>
+      </TooltipPrimitive.Root>
+    </TooltipPrimitive.Provider>
   );
 }
 

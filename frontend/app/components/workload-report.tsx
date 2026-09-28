@@ -10,9 +10,9 @@ type Metric = "ttft_ms" | "tpot_ms" | "e2e_ms" | "input_tokens" | "output_tokens
 
 const columns: Percentile[] = ["mean", "p50", "p70", "p95", "p99"];
 const latency: { key: Metric; label: string; unit: string }[] = [
+  { key: "e2e_ms", label: "E2E", unit: "ms" },
   { key: "ttft_ms", label: "TTFT", unit: "ms" },
   { key: "tpot_ms", label: "TPOT", unit: "ms" },
-  { key: "e2e_ms", label: "E2E", unit: "ms" },
 ];
 
 function number(value: number | null | undefined, digits = 1): string {

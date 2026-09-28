@@ -120,7 +120,7 @@ export default function DeploymentPage() {
             </p>
           ) : null}
         </div>
-        <Button variant="ghost" disabled={!deployment} onClick={() => setImportingSuite(true)}>导入压测组合</Button>
+        <Button disabled={!deployment} onClick={() => setImportingSuite(true)}>导入压测组合</Button>
       </div>
 
       <ErrorBanner message={error} />
@@ -597,7 +597,7 @@ function CellRow({
             </span>
           </span>
         </button>
-        <div className="cell-row-actions flex items-center justify-end">
+        <div className="cell-row-actions cell-run-actions">
           {inFlight ? (
             <IconButton
               label="停止"

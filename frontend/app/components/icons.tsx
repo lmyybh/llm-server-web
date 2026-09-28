@@ -102,7 +102,7 @@ export function StopIcon() {
       strokeLinejoin="round"
       className="h-3.5 w-3.5"
     >
-      <rect x="6" y="6" width="12" height="12" rx="1" />
+      <rect x="4" y="4" width="16" height="16" rx="1.5" />
     </svg>
   );
 }

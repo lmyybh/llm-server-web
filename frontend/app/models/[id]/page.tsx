@@ -257,10 +257,10 @@ function DeploymentCard({
           </p>
         </div>
         <div className="relative z-10 flex shrink-0 items-center gap-1">
-          <IconButton label={`编辑 ${deployment.name}`} onClick={onEdit}>
+          <IconButton label={`编辑 ${deployment.name}`} tooltip="编辑" onClick={onEdit}>
             <PencilIcon />
           </IconButton>
-          <IconButton label={`删除 ${deployment.name}`} danger onClick={onDelete}>
+          <IconButton label={`删除 ${deployment.name}`} tooltip="删除" danger onClick={onDelete}>
             <TrashIcon />
           </IconButton>
         </div>
