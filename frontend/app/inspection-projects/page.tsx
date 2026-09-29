@@ -73,7 +73,6 @@ export default function InspectionProjectsPage() {
       <div className="project-heading-info"><h1>巡检项目</h1>
         {!loading && <div className="project-summary"><span><b>{items.length}</b> 个内置项目</span>
           <span><b>{items.filter(c => c.default_enabled).length}</b> 项默认选中</span>
-          {items[0] && <span className="project-version">用例集 v{items[0].suite_version}</span>}
         </div>}
       </div>
       <button className="project-control" disabled={busy || loading || !items.length} onClick={() => setResetOpen(true)}>恢复初始设置</button>
@@ -159,7 +158,7 @@ function ProjectEditor({ item, groups, busy, error, onSave }: {
         </label>}
       </div>
       <label className="project-field">项目名称<input className="project-control" required maxLength={60} pattern=".*\S.*" value={title} onChange={e => setTitle(e.target.value)} /></label>
-      <div className="grid grid-cols-2 gap-5"><label className="project-field">执行超时（秒）<input className="project-control w-28" required type="number" min={1} max={900} step={1} value={timeout} onChange={e => setTimeout(e.target.value)} /><small>用于后续巡检。{item.case_id === "disruption.abort_storm" && "恢复检查另有 30 秒预算。"}</small></label>
+      <div className="grid grid-cols-2 gap-5"><label className="project-field">执行超时（秒）<input className="project-control w-28" required type="number" min={1} max={900} step={1} value={timeout} onChange={e => setTimeout(e.target.value)} /><small>用于后续巡检。{item.case_id === "disruption.abort_storm" && "恢复检查另有 30 秒预算。"}{item.case_id === "stability.high_concurrency" && "包含数据准备、5 分钟加压和收尾，建议保留 900 秒；取消或超时后仍最多用 60 秒检查恢复。"}</small></label>
         <label className="text-xs"><span className="flex items-center gap-2"><input type="checkbox" checked={enabled} onChange={e => setEnabled(e.target.checked)} />新服务默认选中</span><small className="mt-3 block text-slate-400">不改动已有服务的选择。</small></label></div>
     </fieldset></section>
     <section><h3>内置请求入口 <span className="font-normal text-slate-400">只读</span></h3><pre className="whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-3 text-xs">{item.endpoint}</pre></section>

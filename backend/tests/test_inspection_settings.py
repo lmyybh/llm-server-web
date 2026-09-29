@@ -148,7 +148,7 @@ def test_runner_receives_snapshot_not_current_settings(tmp_path, monkeypatch):
 
     async def inspect(*args, **kwargs):
         captured.update(kwargs)
-        return inspection.RunSummary(inspection.SUITE_VERSION, inspection.TargetFacts("http://test", "m"))
+        return inspection.RunSummary(inspection.TargetFacts("http://test", "m"))
 
     monkeypatch.setattr(inspection_runner, "run_inspection", inspect)
     asyncio.run(inspection_runner.execute(run["id"], path))

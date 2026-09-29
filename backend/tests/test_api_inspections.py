@@ -114,16 +114,17 @@ def test_starting_an_inspection_for_an_unknown_service_is_a_404(client):
     assert client.post("/api/services/999/inspections").status_code == 404
 
 
-def test_an_inspection_records_its_suite_version(client, service_id):
-    """Two inspections of different suite versions are not comparable, and the
-    version is what says so."""
+def test_inspections_do_not_write_or_expose_suite_versions(client, service_id):
     connection = store.connect(client.app.state.db_path)
     try:
         run = store.create_inspection_run(connection, service_id)
-        store.set_inspection_status(connection, run["id"], "running", suite_version="7")
+        store.set_inspection_status(connection, run["id"], "running")
+        assert connection.execute("SELECT suite_version FROM inspection_run WHERE id = ?", (run["id"],)).fetchone()[0] is None
+        connection.execute("UPDATE inspection_run SET suite_version = '7' WHERE id = ?", (run["id"],))
     finally:
         connection.close()
-    assert client.get(f"/api/inspections/{run['id']}").json()["suite_version"] == "7"
+    assert "suite_version" not in client.get(f"/api/inspections/{run['id']}").json()
+    assert "suite_version" not in client.get(f"/api/services/{service_id}/inspections").json()[0]
 
 
 def test_case_results_come_back_with_their_requirement_flag(client, service_id):

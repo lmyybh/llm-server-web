@@ -201,7 +201,7 @@ def test_catalogue_exposes_new_cases_and_guides():
     cases = {c["case_id"]: c for c in i.case_catalogue()}
     for case_id in ("extensions.tools_stream", "extensions.tools_roundtrip", "extensions.structured_output"):
         assert cases[case_id]["steps"] and cases[case_id]["default_enabled"]
-        assert cases[case_id]["suite_version"] == "9"
+        assert "suite_version" not in cases[case_id]
 
 
 @pytest.mark.parametrize("probe", [i.case_extensions_tools_stream, i.case_extensions_tools_roundtrip])

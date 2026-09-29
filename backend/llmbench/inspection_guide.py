@@ -1,6 +1,25 @@
 """User-facing explanations of the built-in inspection cases."""
 
 CASE_GUIDE = {
+    "context.long_input": {
+        "description": "以 90% 上下文长度的输入检查长输入处理，默认按需开启。",
+        "steps": ["读取上下文上限，用消息 tokenizer 构造占上限 90% 的输入（误差不超过上下文的 0.1%，最少 1 token）。",
+                  "预留最多 64 个输出 token，确认输入加输出预算不超限，再请求简短回复。"],
+        "pass_rule": "输入达到目标，响应合法、非空并正常结束。",
+        "fail_rule": "已确认预算未越界但被明确以超上下文拒绝、返回 5xx 或响应损坏。",
+        "other_rule": "缺少上下文上限或 tokenizer 则跳过；构造不到目标、短回复被截断或其他拒绝时无法判定；连接或超时为执行出错。",
+        "endpoint": "POST /v1/tokenize → /v1/chat/completions"
+    },
+    "output.long_generation": {
+        "description": "目标输出为上下文上限的 90%，检查长时间流式生成，默认按需开启。",
+        "steps": ["目标输出设为上下文上限的 90%，先计数短输入并检查总预算。",
+                  "流式请求 max_tokens=目标值并要求用量统计；不静默降低目标。",
+                  "检查结束标记与 completion_tokens，实际长度采用服务报告的计数。"],
+        "pass_rule": "实际输出达到目标，流式数据合法且完整结束。",
+        "fail_rule": "返回 5xx、流式格式损坏、缺少结束标记或实际输出超过请求上限。",
+        "other_rule": "缺少前提则跳过；独立输出上限不足、提前结束、缺少计数或请求拒绝时无法判定；连接或超时为执行出错。",
+        "endpoint": "POST /v1/tokenize → /v1/chat/completions · stream=true"
+    },
     "extensions.tools_stream": {
         "description": "检查流式工具调用的分段参数能否正确拼接。",
         "steps": ["开启流式输出，指定调用 get_weather 工具。",
@@ -135,6 +154,19 @@ CASE_GUIDE = {
         "fail_rule": "已声明支持但开关行为不符，或出现错误响应。",
         "other_rule": "未声明能力且未观察到开启效果时，无法判定。",
         "endpoint": "POST /v1/chat/completions × 2"
+    },
+    "stability.high_concurrency": {
+        "description": "用 100K 随机输入、2K 输出持续检查高并发稳定性，默认不选中。",
+        "steps": [
+            "校验上下文至少 104448 token，健康、普通聊天和流式聊天正常。",
+            "为每个请求生成不同随机数据，用消息 tokenizer 校准到 102400 token（允许向上 0.1% 误差）。",
+            "直接启动 64 个流式请求，设置 max_tokens=2048、ignore_eos=true；完成后补充新请求，持续 5 分钟。",
+            "每个请求最多 180 秒；停止补充后等待在途请求结束，再用最多 60 秒验证健康和聊天连续成功 3 轮。"
+        ],
+        "pass_rule": "完成 5 分钟，峰值达到 64、平均在途请求数至少 57.6，至少 90% 完成请求实际达到 100K 输入和 2K 输出，无服务、协议或连接错误，恢复通过。",
+        "fail_rule": "出现 5xx、断流、格式错误、输出超限或恢复失败。",
+        "other_rule": "缺少上下文或 tokenizer 时跳过；预算不足、参数不支持、限流或实际负载不足时无法判定；超时、连接异常为执行错误。平均并发指客户端在途请求数。",
+        "endpoint": "POST /v1/tokenize → /v1/chat/completions · 64 并发"
     },
     "disruption.abort_storm": {
         "description": "主动断开部分请求，检查其他请求和服务恢复。",

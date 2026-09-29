@@ -26,10 +26,6 @@ from typing import Awaitable, Callable
 import aiohttp
 from .inspection_guide import CASE_GUIDE
 
-SUITE_VERSION = "9"
-"""Bumped whenever the catalogue or probe semantics change. Two Inspection Runs with different
-suite versions are not comparable, and the number is what says so."""
-
 HEALTH_PATH = "/health"
 """SGLang answers this without an API key. A service that fails it is not
 reachable at all, which is a discovery failure rather than a case failure."""
@@ -50,6 +46,9 @@ CASE_METADATA = {
     "validation.wrong_field_type": ("错误字段类型", "异常输入"),
     "output.small_limit": ("输出上限生效", "边界行为"),
     "context.overflow": ("超出上下文长度", "边界行为"),
+    "context.long_input": ("长输入处理", "长序列"),
+    "output.long_generation": ("长输出生成", "长序列"),
+    "stability.high_concurrency": ("高并发稳定性", "并发稳定性"),
     "extensions.tools": ("工具调用能力", "可选能力"),
     "extensions.tools_stream": ("流式工具调用", "可选能力"),
     "extensions.tools_roundtrip": ("工具结果回传", "可选能力"),
@@ -64,8 +63,8 @@ def case_catalogue() -> list[dict]:
         {"case_id": case.case_id, "title": CASE_METADATA[case.case_id][0],
          "group": CASE_METADATA[case.case_id][1],
          "timeout_seconds": int(case.timeout_seconds),
-         "default_enabled": not case.disruptive,
-         "suite_version": SUITE_VERSION, **CASE_GUIDE[case.case_id]}
+         "default_enabled": case.default_enabled and not case.disruptive,
+         **CASE_GUIDE[case.case_id]}
         for case in catalogue()
     ]
 
@@ -107,6 +106,7 @@ class TargetFacts:
     thinking: str = UNKNOWN
     server_kind: str = "openai-compatible"
     server_version: str | None = None
+    max_output_tokens: int | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -118,6 +118,7 @@ class TargetFacts:
             "thinking": self.thinking,
             "server_kind": self.server_kind,
             "server_version": self.server_version,
+            "max_output_tokens": self.max_output_tokens,
         }
 
 
@@ -156,14 +157,12 @@ class CaseOutcome:
 
 @dataclass
 class RunSummary:
-    suite_version: str
     target: TargetFacts | None
     cases: list[CaseOutcome] = field(default_factory=list)
     run_verdict: str = INCONCLUSIVE
 
     def as_dict(self) -> dict:
         return {
-            "suite_version": self.suite_version,
             "target": self.target.as_dict() if self.target else None,
             "verdict": self.run_verdict,
             "cases": [case.as_dict() for case in self.cases],
@@ -301,6 +300,7 @@ async def discover(
             model=str(model["id"]),
             context_length=context_length,
             tokenizer_available=tokenizer_available,
+            max_output_tokens=_positive_int(model.get("max_output_tokens")),
             tools=tools,
             thinking=thinking,
             server_kind=server_kind,
@@ -409,6 +409,7 @@ class Case:
     timeout_seconds: float = CASE_TIMEOUT_SECONDS
     recovery_required: bool = False
     disruptive: bool = False
+    default_enabled: bool = True
 
 
 async def case_completion_non_stream(
@@ -512,11 +513,12 @@ async def _stream_request(
         "finish_reason": None,
         "generated": 0,
         "stopped_at": None,
+        "usage": None,
     }
 
-    def absorb(raw: bytes) -> bool:
+    def absorb_events(events) -> bool:
         """Returns whether the caller should disconnect."""
-        for event in parser.feed(raw):
+        for event in events:
             summary["events"] += 1
             if event.data == "[DONE]":
                 summary["done"] = True
@@ -527,6 +529,11 @@ async def _stream_request(
                 summary["invalid_events"] += 1
                 continue
             choices = body.get("choices") if isinstance(body, dict) else None
+            if not isinstance(body, dict) or "error" in body:
+                summary["invalid_events"] += 1
+                continue
+            if isinstance(body, dict) and isinstance(body.get("usage"), dict):
+                summary["usage"] = body["usage"]
             if not isinstance(choices, list) or not choices:
                 continue
             choice = choices[0]
@@ -553,13 +560,10 @@ async def _stream_request(
                 return exchange, summary
             async for chunk in response.content.iter_any():
                 chunks.append(chunk)
-                if absorb(chunk):
+                if absorb_events(parser.feed(chunk)):
                     break
             if stop_after_tokens is None:
-                for event in parser.close():
-                    summary["events"] += 1
-                    if event.data == "[DONE]":
-                        summary["done"] = True
+                absorb_events(parser.close())
     except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
         exchange.error = f"{type(exc).__name__}: {exc}"
     except asyncio.CancelledError:
@@ -1183,7 +1187,8 @@ def _stream_survived(exchange: Exchange, stream: dict) -> bool:
 
 
 async def verify_recovery(
-    session: aiohttp.ClientSession, facts: TargetFacts, *, api_key: str | None = None
+    session: aiohttp.ClientSession, facts: TargetFacts, *, api_key: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> bool:
     """Did the service come back?
 
@@ -1196,7 +1201,7 @@ async def verify_recovery(
     consecutive = 0
     observed_failure = False
     try:
-        async with asyncio.timeout(RECOVERY_DEADLINE_SECONDS):
+        async with asyncio.timeout(RECOVERY_DEADLINE_SECONDS if timeout_seconds is None else timeout_seconds):
             while consecutive < RECOVERY_ROUNDS:
                 health, chat = await asyncio.gather(
                     _request(session, "GET", f"{facts.base_url}{HEALTH_PATH}", headers=headers),
@@ -1250,11 +1255,13 @@ def _outcome(case_id: str, passed: bool, exchange: Exchange, *, required: bool =
 
 
 def catalogue() -> list[Case]:
-    """Every case this suite version runs, in order.
+    """Every built-in case, in execution order.
 
     Cheapest and most fundamental first: a service that cannot answer a plain
     request should say so immediately rather than after a minute of probes.
     """
+    from .inspection_long import case_long_input, case_long_output
+    from .inspection_stability import case_high_concurrency
     return [
         # The service's own probes first: the cheapest way to learn it is up.
         Case("health.generate", case_health_generate),
@@ -1264,6 +1271,8 @@ def catalogue() -> list[Case]:
         Case("validation.missing_messages", case_validation_missing_messages),
         Case("validation.wrong_field_type", case_validation_wrong_field_type),
         Case("output.small_limit", case_output_small_limit),
+        Case("context.long_input", case_long_input, timeout_seconds=300, default_enabled=False),
+        Case("output.long_generation", case_long_output, timeout_seconds=900, default_enabled=False),
         Case(
             "context.overflow",
             case_context_overflow,
@@ -1279,7 +1288,9 @@ def catalogue() -> list[Case]:
         Case("extensions.tools_roundtrip", case_extensions_tools_roundtrip, required=False),
         Case("extensions.structured_output", case_extensions_structured_output, required=False),
         Case("extensions.thinking", case_extensions_thinking, required=False),
-        # Last, and the only disruptive one: it aborts generations on purpose,
+        Case("stability.high_concurrency", case_high_concurrency, timeout_seconds=900,
+             default_enabled=False, disruptive=True),
+        # Last: it aborts generations on purpose,
         # so anything after it would be measuring the aftermath.
         Case(
             "disruption.abort_storm",
@@ -1322,7 +1333,7 @@ async def run_inspection(
 ) -> RunSummary:
     """Inspect one service. Never raises for a service's behaviour — only a
     failed discovery is fatal, because nothing can be judged without it."""
-    summary = RunSummary(suite_version=SUITE_VERSION, target=None)
+    summary = RunSummary(target=None)
 
     def emit(event: dict) -> None:
         if on_event is not None:
@@ -1362,8 +1373,12 @@ async def run_inspection(
                             timeout=(case_timeouts or {}).get(case.case_id, case.timeout_seconds),
                         )
                     except asyncio.TimeoutError:
+                        timeout_message = "case timed out"
+                        if case.case_id in {"context.long_input", "output.long_generation"}:
+                            target = facts.context_length * 9 // 10 if facts.context_length else "未知"
+                            timeout_message = f"目标 {target} token（90% 上下文）；实际长度未能完整确认。执行超时，已接收的数据保留在请求记录中。"
                         outcome = CaseOutcome(
-                            case.case_id, case.required, ERROR, "case_deadline", "case timed out"
+                            case.case_id, case.required, ERROR, "case_deadline", timeout_message
                         )
                     except Exception:  # noqa: BLE001 — preserve the full inspector error
                         outcome = CaseOutcome(
@@ -1371,6 +1386,8 @@ async def run_inspection(
                             traceback.format_exc(),
                         )
 
+                    if case.case_id == "stability.high_concurrency" and outcome.verdict in {FAIL, ERROR}:
+                        run_unsafe = True
                     if case.recovery_required:
                         # Check even after failure/timeout and retain the original evidence.
                         original = outcome

@@ -387,7 +387,6 @@ export type InspectionProject = InspectionCaseDefinition & {
   endpoint: string;
   timeout_seconds: number;
   default_enabled: boolean;
-  suite_version: string;
 };
 export type InspectionProjectSettings = Pick<InspectionProject, "title" | "group" | "timeout_seconds" | "default_enabled">;
 
@@ -408,7 +407,6 @@ export type InspectionStatus = "queued" | "running" | "completed" | "failed" | "
 export type InspectionRun = {
   id: number;
   service_id: number;
-  suite_version: string | null;
   case_ids: string[];
   completed_cases: number;
   target: InspectionTarget | null;

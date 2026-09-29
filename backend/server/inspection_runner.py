@@ -16,7 +16,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from llmbench.inspection import SUITE_VERSION, ERROR, run_inspection
+from llmbench.inspection import ERROR, run_inspection
 
 from . import store
 from .config import database_path
@@ -38,7 +38,6 @@ async def execute(inspection_run_id: int, db_path: Path) -> None:
                     connection,
                     inspection_run_id,
                     "running",
-                    suite_version=SUITE_VERSION,
                     target=event["target"],
                 )
             elif event["type"] == "case_started":
@@ -69,7 +68,6 @@ async def execute(inspection_run_id: int, db_path: Path) -> None:
             inspection_run_id,
             "failed" if discovery_failed else "completed",
             verdict=summary.run_verdict,
-            suite_version=SUITE_VERSION,
             error=(
                 summary.cases[0].message if discovery_failed and summary.cases else None
             ),

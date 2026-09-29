@@ -8,7 +8,7 @@ const item: InspectionProject = {
   case_id: "health.generate", title: "生成接口健康检查", group: "基础接口",
   description: "检查生成健康入口", steps: ["请求健康入口"], pass_rule: "返回 200",
   fail_rule: "状态异常", other_rule: "执行出错", endpoint: "GET /health_generate",
-  timeout_seconds: 60, default_enabled: true, suite_version: "8",
+  timeout_seconds: 60, default_enabled: true,
 };
 afterEach(() => vi.restoreAllMocks());
 

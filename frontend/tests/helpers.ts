@@ -211,7 +211,6 @@ export function makeInspection(overrides: Partial<InspectionRun> = {}): Inspecti
   return {
     id: 1,
     service_id: 1,
-    suite_version: "2",
     case_ids: ["completion.non_stream", "extensions.tools"],
     completed_cases: 2,
     target: {

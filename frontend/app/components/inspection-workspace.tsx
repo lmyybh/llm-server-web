@@ -179,7 +179,7 @@ function CaseDetail({
           <div className="min-h-0 flex-1 overflow-y-auto p-5 sm:p-7">
             <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-xs sm:grid-cols-3 dark:border-neutral-700 dark:bg-neutral-800/50">
               <div><p className="text-slate-400">状态</p><p className="mt-1 font-semibold">{detail.label}</p></div>
-              <div><p className="text-slate-400">请求数</p><p className="mt-1 font-semibold">{result?.evidence?.length ?? 0}</p></div>
+              <div><p className="text-slate-400">证据记录数</p><p className="mt-1 font-semibold">{result?.evidence?.length ?? 0}</p></div>
               <div><p className="text-slate-400">判定</p><p className="mt-1 font-semibold">{result?.reason_code ?? "—"}</p></div>
             </div>
 

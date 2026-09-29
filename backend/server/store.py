@@ -13,7 +13,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from llmbench.inspection import SUITE_VERSION, catalogue, case_catalogue
+from llmbench.inspection import catalogue, case_catalogue
 
 SCHEMA_VERSION = 14
 
@@ -185,7 +185,7 @@ CREATE TABLE IF NOT EXISTS service (
 CREATE TABLE IF NOT EXISTS inspection_run (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     service_id    INTEGER NOT NULL REFERENCES service(id) ON DELETE CASCADE,
-    suite_version TEXT,
+    suite_version TEXT, -- Legacy migration data only; new runs leave this NULL.
     case_ids_json TEXT,
     target_json   TEXT,
     status        TEXT NOT NULL,
@@ -1506,7 +1506,7 @@ def reset_inspection_cases(connection: sqlite3.Connection) -> list[dict]:
 
 def _service_summary(service: dict) -> dict:
     saved = service.pop("enabled_case_ids_json", None)
-    service["enabled_case_ids"] = json.loads(saved) if saved else [case.case_id for case in catalogue() if not case.disruptive]
+    service["enabled_case_ids"] = json.loads(saved) if saved else [case.case_id for case in catalogue() if case.default_enabled and not case.disruptive]
     return service
 
 
@@ -1583,10 +1583,10 @@ def create_inspection_run(connection: sqlite3.Connection, service_id: int) -> di
         raise Invalid("请先选择至少一个巡检项目")
     cursor = connection.execute(
         """
-        INSERT INTO inspection_run (service_id, suite_version, case_ids_json, status, queued_at)
-        VALUES (?, ?, ?, 'queued', ?)
+        INSERT INTO inspection_run (service_id, case_ids_json, status, queued_at)
+        VALUES (?, ?, 'queued', ?)
         """,
-        (service_id, SUITE_VERSION, json.dumps(service["enabled_case_ids"]), _now()),
+        (service_id, json.dumps(service["enabled_case_ids"]), _now()),
     )
     run_id = int(cursor.lastrowid)
     connection.execute(
@@ -1636,6 +1636,8 @@ def get_inspection_run(connection: sqlite3.Connection, inspection_run_id: int) -
         "SELECT cases_json FROM inspection_run_setting WHERE inspection_run_id = ?", (inspection_run_id,)
     ).fetchone()
     run["case_settings"] = json.loads(setting["cases_json"]) if setting else []
+    for case in run["case_settings"]:
+        case.pop("suite_version", None)
     if row["case_ids_json"] is None:
         run["case_ids"] = _legacy_inspection_case_ids(connection, inspection_run_id)
     cases = connection.execute(
@@ -1675,6 +1677,7 @@ def delete_inspection_run(connection: sqlite3.Connection, inspection_run_id: int
 
 
 def _inspection_summary(run: dict) -> dict:
+    run.pop("suite_version", None)
     progress = run.pop("progress_json", None)
     run["progress"] = json.loads(progress) if progress else None
     run["target"] = json.loads(run.pop("target_json", None) or "null")
@@ -1689,7 +1692,6 @@ def set_inspection_status(
     *,
     error: str | None = None,
     verdict: str | None = None,
-    suite_version: str | None = None,
     target: dict | None = None,
     pid: int | None = None,
 ) -> bool:
@@ -1702,7 +1704,6 @@ def set_inspection_status(
            SET status = ?,
                error = ?,
                verdict = COALESCE(?, verdict),
-               suite_version = COALESCE(?, suite_version),
                target_json = COALESCE(?, target_json),
                pid = COALESCE(?, pid),
                started_at = COALESCE(?, started_at),
@@ -1713,7 +1714,6 @@ def set_inspection_status(
             status,
             error,
             verdict,
-            suite_version,
             json.dumps(target) if target is not None else None,
             pid,
             now if status == "running" else None,
