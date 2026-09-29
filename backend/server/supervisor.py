@@ -28,31 +28,73 @@ def artifact_dir(target_id: int, kind: str = "cells") -> Path:
     return path
 
 
-def spawn_inspection(db_path: Path, inspection_run_id: int) -> int:
-    """Start an inspector.
+def start_inspection(db_path: Path, service_id: int) -> dict:
+    """Reserve a target atomically with benchmark scheduling; never wait behind it."""
+    with _queue_lock:
+        connection = store.connect(db_path)
+        try:
+            service = store.get_service(connection, service_id)
+            target = service["router_url"]
+            busy = store.active_inspection_urls(connection)
+            busy.update(
+                url for (active_db, _), url in _active_targets.items()
+                if active_db == db_path.resolve()
+            )
+            busy.update(row["router_url"] for row in connection.execute(
+                """SELECT d.router_url FROM cell AS c
+                   JOIN deployment AS d ON d.id = c.deployment_id WHERE c.status = 'running'"""
+            ))
+            if target in busy:
+                raise store.Conflict("目标正在压测或巡检，请等待当前任务结束后重试。")
+            run = store.create_inspection_run(connection, service_id)
+            try:
+                spawn_inspection(db_path, run["id"], service=service)
+            except Exception as exc:
+                store.set_inspection_status(
+                    connection, run["id"], "failed", verdict="ERROR", error=f"inspector could not start: {exc}"
+                )
+            return store.get_inspection_run(connection, run["id"])
+        finally:
+            connection.close()
 
-    Deliberately **not** put through the queue. An inspection is short, and its
-    whole value is answering "is this service alright right now" — waiting
-    behind a forty-minute sweep would make it useless for that.
-    """
+
+def spawn_inspection(db_path: Path, inspection_run_id: int, *, service: dict | None = None) -> int:
+    """Start an inspector on a reserved target. Caller holds _queue_lock."""
+    if service is None:
+        connection = store.connect(db_path)
+        try:
+            run = store.get_inspection_run(connection, inspection_run_id)
+            service = store.get_service(connection, run["service_id"])
+        finally:
+            connection.close()
+    target_url = service["router_url"]
     directory = artifact_dir(inspection_run_id, kind="inspections")
     log = open(directory / "executor.log", "wb")  # noqa: SIM115 — handed to the thread
-    environment = {**os.environ, "LLMBENCH_DB": str(db_path)}
+    environment = {
+        **os.environ, "LLMBENCH_DB": str(db_path),
+        "LLMBENCH_INSPECTION_TARGET_URL": target_url,
+        "LLMBENCH_INSPECTION_KEY_ENV": service["api_key_env"],
+    }
 
-    process = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "server.inspection_runner",
-            "--inspection-run-id",
-            str(inspection_run_id),
-        ],
-        cwd=BACKEND_ROOT,
-        env=environment,
-        stdout=log,
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
+    try:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "server.inspection_runner",
+                "--inspection-run-id",
+                str(inspection_run_id),
+            ],
+            cwd=BACKEND_ROOT,
+            env=environment,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    except Exception:
+        log.close()
+        raise
+    _active_targets[(db_path.resolve(), process.pid)] = target_url
 
     connection = store.connect(db_path)
     try:
@@ -70,21 +112,22 @@ def spawn_inspection(db_path: Path, inspection_run_id: int) -> int:
 
 
 def _supervise_inspection(db_path: Path, inspection_run_id: int, process, log) -> None:
-    returncode = process.wait()
-    log.close()
-    if returncode == 0:
-        # The inspector recorded its own verdict; there is nothing to add.
-        return
-    connection = store.connect(db_path)
     try:
-        store.set_inspection_status(
-            connection,
-            inspection_run_id,
-            "failed",
-            error=f"inspector exited with code {returncode}",
-        )
+        returncode = process.wait()
+        log.close()
+        connection = store.connect(db_path)
+        try:
+            # A clean exit without a terminal record is also an execution error.
+            store.set_inspection_status(
+                connection, inspection_run_id, "failed", verdict="ERROR",
+                error=f"inspector exited with code {returncode} without a completed result",
+            )
+        finally:
+            connection.close()
     finally:
-        connection.close()
+        with _queue_lock:
+            _active_targets.pop((db_path.resolve(), process.pid), None)
+            _start_available(db_path)
 
 
 _queue_lock = threading.Lock()
@@ -218,6 +261,20 @@ def cancel(db_path: Path, cell_id: int) -> bool:
     if cancelled and pid:
         terminate(pid)
     return cancelled
+
+
+def cancel_inspection(db_path: Path, inspection_run_id: int) -> bool:
+    # Wait for startup to publish the PID before cancellation can read it.
+    with _queue_lock:
+        connection = store.connect(db_path)
+        try:
+            run = store.get_inspection_run(connection, inspection_run_id)
+            cancelled = store.cancel_inspection_run(connection, inspection_run_id)
+        finally:
+            connection.close()
+        if cancelled and run["pid"]:
+            terminate(run["pid"])
+        return cancelled
 
 
 def terminate(pid: int) -> None:

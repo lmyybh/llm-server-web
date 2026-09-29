@@ -51,7 +51,7 @@ _Avoid_: 配置、参数、config snapshot、Run Signature
 _Avoid_: 健康检查、check、接口测试
 
 ### Inspection Suite（巡检用例集）
-一组带**版本号**的巡检用例。用例集是巡检结果的**可比性前提**：用例集版本不同，两次巡检的结果不可比。第一版套件版本为 `5`，含 10 个用例。
+一组带**版本号**的巡检用例。用例集是巡检结果的**可比性前提**：用例集版本不同，两次巡检的结果不可比。当前套件版本为 `8`，含 11 个用例；本次选择的用例范围也是结论的边界。
 
 _Avoid_: 测试集、场景集、profile
 
@@ -78,7 +78,7 @@ _Avoid_: 逐节点 flush、worker 列表
 _Avoid_: 报告目录、输出文件夹、result
 
 ### Verdict（结论）
-一次测量或一条用例的结果，必须区分**服务本身的失败**与**无法得出结论**。第一版沿用四值：`PASS` / `FAIL` / `SKIPPED` / `INCONCLUSIVE`。关键区分：`FAIL` 表示服务违反了契约，`INCONCLUSIVE` 表示测不出来——两者绝不可合并。
+一次测量或一条用例的结果，必须区分**服务本身的失败**与**无法得出结论**。巡检使用五值：`PASS` / `FAIL` / `SKIPPED` / `INCONCLUSIVE` / `ERROR`；`FAIL` 表示已观察到服务违反契约，`INCONCLUSIVE` 表示证据或覆盖不足，`ERROR` 表示巡检执行出错，不能把后两者等同于服务失败。
 
 _Avoid_: 结果、状态、result
 

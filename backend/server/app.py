@@ -22,7 +22,6 @@ from fastapi.responses import JSONResponse, Response
 
 from llmbench import datasets
 from llmbench.datasets import DatasetError
-from llmbench.inspection import case_catalogue
 
 from . import estimate, store, supervisor
 from .config import ARTIFACTS_ROOT, CORS_ORIGIN_REGEX, CORS_ORIGINS, database_path
@@ -33,6 +32,7 @@ from .schemas import (
     DeploymentCreate,
     DeploymentUpdate,
     InspectionCaseSelection,
+    InspectionCaseUpdate,
     ModelCreate,
     ModelUpdate,
     ServiceCreate,
@@ -434,8 +434,20 @@ def compare(model_id: int, deployment_ids: str, connection: sqlite3.Connection =
 
 
 @router.get("/inspection-cases")
-def list_inspection_cases() -> list[dict]:
-    return case_catalogue()
+def list_inspection_cases(connection: sqlite3.Connection = Connection) -> list[dict]:
+    return store.list_inspection_cases(connection)
+
+
+@router.patch("/inspection-cases/{case_id}")
+def update_inspection_case(case_id: str, payload: InspectionCaseUpdate,
+                           connection: sqlite3.Connection = Connection) -> dict:
+    return _guard(store.update_inspection_case, connection, case_id,
+                  payload.model_dump(exclude_unset=True))
+
+
+@router.post("/inspection-cases/reset")
+def reset_inspection_cases(connection: sqlite3.Connection = Connection) -> list[dict]:
+    return store.reset_inspection_cases(connection)
 
 
 @router.get("/services")
@@ -479,9 +491,7 @@ def list_inspections(service_id: int, connection: sqlite3.Connection = Connectio
 def start_inspection(
     service_id: int, request: Request, connection: sqlite3.Connection = Connection
 ) -> dict:
-    run = _guard(store.create_inspection_run, connection, service_id)
-    supervisor.spawn_inspection(request.app.state.db_path, run["id"])
-    return store.get_inspection_run(connection, run["id"])
+    return _guard(supervisor.start_inspection, request.app.state.db_path, service_id)
 
 
 @router.get("/inspections/{inspection_run_id}")
@@ -507,10 +517,8 @@ def cancel_inspection(
         raise HTTPException(
             status.HTTP_409_CONFLICT, f"inspection {inspection_run_id} is already {run['status']}"
         )
-    if not store.cancel_inspection_run(connection, inspection_run_id):
+    if not supervisor.cancel_inspection(request.app.state.db_path, inspection_run_id):
         raise HTTPException(status.HTTP_409_CONFLICT, "it finished before it could be cancelled")
-    if run["pid"]:
-        supervisor.terminate(run["pid"])
     return store.get_inspection_run(connection, inspection_run_id)
 
 

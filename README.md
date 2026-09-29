@@ -134,7 +134,7 @@ v1 没有登录，所以**任何能触达这个 API 的页面都能替你建模�
 ## 测试
 
 ```bash
-cd backend && python3 -m pytest         # 测量内核 + API
+cd backend && ./test.sh                 # 测量内核 + API；使用隔离的临时数据库
 cd frontend && npm test                 # 组件测试（vitest + testing-library）
 cd frontend && npm run typecheck && npm run lint && npm run build
 ```

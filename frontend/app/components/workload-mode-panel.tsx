@@ -19,7 +19,7 @@ export function WorkloadModePanel({ mode, count, action, onAdd, children }: {
   onAdd: () => void;
   children: ReactNode;
 }) {
-  return <section className="card-mode-panel flex min-w-0 flex-col gap-3">
+  return <section aria-label={PANEL_TITLES[mode]} className="card-mode-panel flex min-w-0 flex-col gap-3">
     <div className="flex items-center justify-between gap-2">
       <h3 className="flex items-center gap-1.5 text-sm font-medium">
         {PANEL_TITLES[mode]}

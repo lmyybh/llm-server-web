@@ -378,6 +378,19 @@ export type InspectionCaseDefinition = {
   group: string;
 };
 
+export type InspectionProject = InspectionCaseDefinition & {
+  description: string;
+  steps: string[];
+  pass_rule: string;
+  fail_rule: string;
+  other_rule: string;
+  endpoint: string;
+  timeout_seconds: number;
+  default_enabled: boolean;
+  suite_version: string;
+};
+export type InspectionProjectSettings = Pick<InspectionProject, "title" | "group" | "timeout_seconds" | "default_enabled">;
+
 export type InspectionExchange = {
   method: string;
   url: string;
@@ -569,6 +582,10 @@ export const api = {
   listInspections: (serviceId: number) =>
     request<InspectionRun[]>(`/api/services/${serviceId}/inspections`),
   listInspectionCases: () => request<InspectionCaseDefinition[]>("/api/inspection-cases"),
+  listInspectionProjects: () => request<InspectionProject[]>("/api/inspection-cases"),
+  updateInspectionProject: (id: string, changes: Partial<InspectionProjectSettings>) =>
+    request<InspectionProject>(`/api/inspection-cases/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(changes) }),
+  resetInspectionProjects: () => request<InspectionProject[]>("/api/inspection-cases/reset", { method: "POST" }),
   configureInspectionCases: (serviceId: number, caseIds: string[]) =>
     request<Service>(`/api/services/${serviceId}/inspection-cases`, {
       method: "PUT", body: JSON.stringify({ case_ids: caseIds }),

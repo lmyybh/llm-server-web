@@ -13,11 +13,23 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-from llmbench.inspection import CaseOutcome, SUITE_VERSION, aggregate, catalogue
+from llmbench.inspection import SUITE_VERSION, catalogue, case_catalogue
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 14
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS inspection_case_setting (
+    case_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    timeout_seconds INTEGER NOT NULL CHECK(timeout_seconds BETWEEN 1 AND 900),
+    default_enabled INTEGER NOT NULL CHECK(default_enabled IN (0, 1)),
+    group_name TEXT
+);
+CREATE TABLE IF NOT EXISTS inspection_run_setting (
+    inspection_run_id INTEGER PRIMARY KEY REFERENCES inspection_run(id) ON DELETE CASCADE,
+    cases_json TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS model (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     name         TEXT NOT NULL UNIQUE,
@@ -327,6 +339,9 @@ def init_db(connection: sqlite3.Connection) -> None:
         if "defaults_json" in model_columns:
             connection.execute("ALTER TABLE model DROP COLUMN defaults_json")
     connection.executescript(SCHEMA)
+    setting_columns = {row[1] for row in connection.execute("PRAGMA table_info(inspection_case_setting)")}
+    if "group_name" not in setting_columns:
+        connection.execute("ALTER TABLE inspection_case_setting ADD COLUMN group_name TEXT")
     # Existing v6 databases keep their Cell results; newly measured runs fill
     # these columns while older runs simply report them as unavailable.
     if 0 < current_version < 7:
@@ -403,10 +418,13 @@ def _revert_tool_call_repairs(connection: sqlite3.Connection) -> None:
             "SELECT case_id, required, verdict, reason_code FROM inspection_case_result WHERE inspection_run_id = ?",
             (run_id,),
         ).fetchall()
-        verdict = aggregate([
-            CaseOutcome(row["case_id"], bool(row["required"]), row["verdict"], row["reason_code"])
-            for row in rows
-        ])
+        # This repair belongs to the legacy suite; do not apply suite 8 semantics
+        # retroactively to historical results.
+        required = [row["verdict"] for row in rows if row["required"]]
+        verdict = (
+            "FAIL" if any(value in ("FAIL", "ERROR") for value in required)
+            else "INCONCLUSIVE" if "INCONCLUSIVE" in required else "PASS"
+        )
         connection.execute("UPDATE inspection_run SET verdict = ? WHERE id = ?", (verdict, run_id))
 
 
@@ -1148,6 +1166,7 @@ def startable_queued_cell_ids(
                WHERE c.status = 'running'"""
         )
     )
+    busy_urls.update(active_inspection_urls(connection))
     startable = []
     for row in connection.execute(
         """SELECT c.id, d.router_url FROM cell_queue AS q
@@ -1450,9 +1469,44 @@ def _inspection_case_ids() -> list[str]:
     return [case.case_id for case in catalogue()]
 
 
+def list_inspection_cases(connection: sqlite3.Connection) -> list[dict]:
+    settings = {
+        row["case_id"]: dict(row)
+        for row in connection.execute("SELECT * FROM inspection_case_setting")
+    }
+    result = []
+    for case in case_catalogue():
+        case.update(settings.get(case["case_id"], {}))
+        case["group"] = case.pop("group_name", None) or case["group"]
+        case["default_enabled"] = bool(case["default_enabled"])
+        result.append(case)
+    return result
+
+
+def update_inspection_case(connection: sqlite3.Connection, case_id: str, changes: dict) -> dict:
+    case = next((c for c in list_inspection_cases(connection) if c["case_id"] == case_id), None)
+    if case is None:
+        raise NotFound(f"inspection case {case_id} does not exist")
+    case.update(changes)
+    connection.execute(
+        """INSERT INTO inspection_case_setting (case_id, title, timeout_seconds, default_enabled, group_name)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(case_id) DO UPDATE SET title=excluded.title,
+        timeout_seconds=excluded.timeout_seconds, default_enabled=excluded.default_enabled,
+        group_name=excluded.group_name""",
+        (case_id, case["title"], case["timeout_seconds"], int(case["default_enabled"]), case["group"]),
+    )
+    return case
+
+
+def reset_inspection_cases(connection: sqlite3.Connection) -> list[dict]:
+    connection.execute("DELETE FROM inspection_case_setting")
+    return list_inspection_cases(connection)
+
+
 def _service_summary(service: dict) -> dict:
     saved = service.pop("enabled_case_ids_json", None)
-    service["enabled_case_ids"] = json.loads(saved) if saved else _inspection_case_ids()
+    service["enabled_case_ids"] = json.loads(saved) if saved else [case.case_id for case in catalogue() if not case.disruptive]
     return service
 
 
@@ -1483,10 +1537,11 @@ def create_service(connection: sqlite3.Connection, fields: dict) -> dict:
     try:
         cursor = connection.execute(
             """
-            INSERT INTO service (name, note, router_url, api_key_env, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO service (name, note, router_url, api_key_env, created_at, updated_at, enabled_case_ids_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (fields["name"], fields["note"], fields["router_url"], fields["api_key_env"], now, now),
+            (fields["name"], fields["note"], fields["router_url"], fields["api_key_env"], now, now,
+             json.dumps([c["case_id"] for c in list_inspection_cases(connection) if c["default_enabled"]])),
         )
     except sqlite3.IntegrityError as exc:
         raise Conflict(f"a service named {fields['name']!r} already exists") from exc
@@ -1512,8 +1567,20 @@ def update_service(connection: sqlite3.Connection, service_id: int, changes: dic
     return get_service(connection, service_id)
 
 
+def active_inspection_urls(connection: sqlite3.Connection) -> set[str]:
+    return {
+        row["router_url"] for row in connection.execute(
+            """SELECT s.router_url FROM inspection_run AS r
+               JOIN service AS s ON s.id = r.service_id
+               WHERE r.status IN ('queued', 'running')"""
+        )
+    }
+
+
 def create_inspection_run(connection: sqlite3.Connection, service_id: int) -> dict:
     service = get_service(connection, service_id)
+    if not service["enabled_case_ids"]:
+        raise Invalid("请先选择至少一个巡检项目")
     cursor = connection.execute(
         """
         INSERT INTO inspection_run (service_id, suite_version, case_ids_json, status, queued_at)
@@ -1521,7 +1588,13 @@ def create_inspection_run(connection: sqlite3.Connection, service_id: int) -> di
         """,
         (service_id, SUITE_VERSION, json.dumps(service["enabled_case_ids"]), _now()),
     )
-    return get_inspection_run(connection, int(cursor.lastrowid))
+    run_id = int(cursor.lastrowid)
+    connection.execute(
+        "INSERT INTO inspection_run_setting VALUES (?, ?)",
+        (run_id, json.dumps([c for c in list_inspection_cases(connection)
+                            if c["case_id"] in service["enabled_case_ids"]])),
+    )
+    return get_inspection_run(connection, run_id)
 
 
 def list_inspection_runs(connection: sqlite3.Connection, service_id: int) -> list[dict]:
@@ -1559,6 +1632,10 @@ def get_inspection_run(connection: sqlite3.Connection, inspection_run_id: int) -
     if row is None:
         raise NotFound(f"inspection run {inspection_run_id} does not exist")
     run = _inspection_summary(dict(row))
+    setting = connection.execute(
+        "SELECT cases_json FROM inspection_run_setting WHERE inspection_run_id = ?", (inspection_run_id,)
+    ).fetchone()
+    run["case_settings"] = json.loads(setting["cases_json"]) if setting else []
     if row["case_ids_json"] is None:
         run["case_ids"] = _legacy_inspection_case_ids(connection, inspection_run_id)
     cases = connection.execute(
@@ -1618,9 +1695,7 @@ def set_inspection_status(
 ) -> bool:
     """Backend-owned, guarded the same way a Cell's status is."""
     now = _now()
-    guard = ""
-    if status in TERMINAL_STATUSES:
-        guard = " AND status NOT IN ('completed', 'failed', 'cancelled')"
+    guard = " AND status NOT IN ('completed', 'failed', 'cancelled')"
     cursor = connection.execute(
         f"""
         UPDATE inspection_run
@@ -1707,5 +1782,6 @@ def reconcile_stale_inspections(connection: sqlite3.Connection) -> int:
             row["id"],
             "failed",
             error="the backend restarted while this inspection was in flight",
+            verdict="ERROR",
         )
     return len(rows)

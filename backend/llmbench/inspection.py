@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 import traceback
 from contextvars import ContextVar
@@ -23,8 +24,9 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
 import aiohttp
+from .inspection_guide import CASE_GUIDE
 
-SUITE_VERSION = "7"
+SUITE_VERSION = "9"
 """Bumped whenever the catalogue or probe semantics change. Two Inspection Runs with different
 suite versions are not comparable, and the number is what says so."""
 
@@ -49,15 +51,21 @@ CASE_METADATA = {
     "output.small_limit": ("输出上限生效", "边界行为"),
     "context.overflow": ("超出上下文长度", "边界行为"),
     "extensions.tools": ("工具调用能力", "可选能力"),
+    "extensions.tools_stream": ("流式工具调用", "可选能力"),
+    "extensions.tools_roundtrip": ("工具结果回传", "可选能力"),
+    "extensions.structured_output": ("结构化输出", "可选能力"),
     "extensions.thinking": ("思考模式开关", "可选能力"),
-    "disruption.abort_storm": ("客户端中断恢复", "扰动恢复"),
+    "disruption.abort_storm": ("客户端中断场景", "扰动恢复"),
 }
 
 
 def case_catalogue() -> list[dict]:
     return [
         {"case_id": case.case_id, "title": CASE_METADATA[case.case_id][0],
-         "group": CASE_METADATA[case.case_id][1]}
+         "group": CASE_METADATA[case.case_id][1],
+         "timeout_seconds": int(case.timeout_seconds),
+         "default_enabled": not case.disruptive,
+         "suite_version": SUITE_VERSION, **CASE_GUIDE[case.case_id]}
         for case in catalogue()
     ]
 
@@ -322,7 +330,7 @@ def _model_ids(models: Exchange) -> str:
 
 
 def _positive_int(value: object) -> int | None:
-    return value if isinstance(value, int) and value > 0 else None
+    return value if type(value) is int and value > 0 else None
 
 
 # --- assertions -------------------------------------------------------------
@@ -344,13 +352,13 @@ def valid_completion(exchange: Exchange) -> bool:
 
 
 def safe_rejection(exchange: Exchange) -> bool:
-    """A structured 4xx, rather than a crash or a shrug.
+    """A structured input-validation error (400/422), not an arbitrary 4xx.
 
     A service that answers a malformed request with 200, a 5xx, or a dropped
     connection is not being strict — it is being unreliable, and a client
     cannot tell the difference between that and an outage.
     """
-    if exchange.status is None or not (400 <= exchange.status < 500):
+    if exchange.status not in {400, 422}:
         return False
     body = exchange.body
     if not isinstance(body, dict):
@@ -363,6 +371,28 @@ def safe_rejection(exchange: Exchange) -> bool:
         and isinstance(body.get("message"), str)
         and isinstance(body.get("type"), str)
     )
+
+
+def rejection_outcome(case_id: str, exchange: Exchange) -> CaseOutcome:
+    """A rejection proves validation only when it identifies the intended input."""
+    if exchange.error:
+        return _outcome(case_id, False, exchange)
+    if exchange.status in {401, 403, 404, 408, 429}:
+        return CaseOutcome(case_id, True, INCONCLUSIVE, "validation_not_reached",
+                           f"HTTP {exchange.status}: validation could not be evaluated")
+    if not safe_rejection(exchange):
+        return _outcome(case_id, False, exchange)
+    expected = {
+        "validation.malformed_json": ("json", "decode", "parse"),
+        "validation.missing_messages": ("messages",),
+        "validation.wrong_field_type": ("temperature",),
+        "context.overflow": ("context", "token", "length"),
+    }[case_id]
+    detail = json.dumps(exchange.body, ensure_ascii=False).lower()
+    if not any(term in detail for term in expected):
+        return CaseOutcome(case_id, True, INCONCLUSIVE, "rejection_reason_unknown",
+                           "structured rejection did not identify the input under test")
+    return CaseOutcome(case_id, True, PASS, "assertions_passed")
 
 
 # --- cases ------------------------------------------------------------------
@@ -573,7 +603,7 @@ async def _rejection_case(
         raw_body=raw_body,
     )
     exchange.case_id = case_id
-    return _outcome(case_id, safe_rejection(exchange), exchange)
+    return rejection_outcome(case_id, exchange)
 
 
 async def case_validation_malformed_json(
@@ -623,7 +653,12 @@ async def case_output_small_limit(
 
     usage = exchange.body.get("usage") if isinstance(exchange.body, dict) else None
     produced = usage.get("completion_tokens") if isinstance(usage, dict) else None
-    if isinstance(produced, int) and produced > 1:
+    if type(produced) is not int or produced < 0:
+        return CaseOutcome(
+            "output.small_limit", True, INCONCLUSIVE, "missing_token_evidence",
+            "completion_tokens must be a non-negative integer to verify the limit",
+        )
+    if produced > 1:
         return CaseOutcome(
             "output.small_limit",
             True,
@@ -652,6 +687,21 @@ async def case_context_overflow(
         "messages": [{"role": "user", "content": "x " * (facts.context_length + 64)}],
         "stream": False,
     }
+    counted = await _request(
+        session, "POST", f"{facts.base_url}/v1/tokenize",
+        headers=auth_headers(api_key),
+        payload={"model": facts.model, "messages": payload["messages"]},
+    )
+    if counted.error:
+        return _outcome("context.overflow", False, counted)
+    if counted.status is not None and counted.status >= 500:
+        return _outcome("context.overflow", False, counted)
+    count = _positive_int(counted.body.get("count")) if isinstance(counted.body, dict) else None
+    if counted.status != 200 or count is None or count <= facts.context_length:
+        return CaseOutcome(
+            "context.overflow", True, INCONCLUSIVE, "overflow_not_established",
+            f"cannot prove input exceeds context length {facts.context_length}; token count: {count}",
+        )
     exchange = await _request(
         session,
         "POST",
@@ -660,10 +710,32 @@ async def case_context_overflow(
         payload=payload,
     )
     exchange.case_id = "context.overflow"
-    return _outcome("context.overflow", safe_rejection(exchange), exchange)
+    return rejection_outcome("context.overflow", exchange)
 
 
 # --- capability cases -------------------------------------------------------
+
+
+def tool_request(facts: TargetFacts) -> dict:
+    return {
+        "model": facts.model,
+        "messages": [{"role": "user", "content": "What's the weather in Paris?"}],
+        "tool_choice": {"type": "function", "function": {"name": "get_weather"}},
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather for a city",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                },
+            }
+        ],
+    }
 
 
 async def case_extensions_tools(
@@ -683,24 +755,7 @@ async def case_extensions_tools(
     if facts.tools == UNSUPPORTED:
         return CaseOutcome(case_id, False, SKIPPED, "capability_unsupported")
 
-    payload = {
-        "model": facts.model,
-        "messages": [{"role": "user", "content": "What's the weather in Paris?"}],
-        "tools": [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "description": "Get the current weather for a city",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {"city": {"type": "string"}},
-                        "required": ["city"],
-                    },
-                },
-            }
-        ],
-    }
+    payload = tool_request(facts)
     exchange = await _request(
         session,
         "POST",
@@ -721,7 +776,7 @@ async def case_extensions_tools(
             return CaseOutcome(
                 case_id, True, FAIL, "assertion_failed", f"declared tools but refused: {exchange.text}"
             )
-        return CaseOutcome(case_id, False, SKIPPED, "capability_unsupported")
+        return CaseOutcome(case_id, False, INCONCLUSIVE, "capability_unknown", exchange.text)
     if valid_tool_call(exchange):
         return CaseOutcome(case_id, required, PASS, "assertions_passed")
     if required:
@@ -757,6 +812,188 @@ def valid_tool_call(
     return True
 
 
+def capability_result(case_id: str, exchange: Exchange, passed: bool, *, required: bool,
+                      message: str) -> CaseOutcome:
+    if exchange.error:
+        return CaseOutcome(case_id, required, ERROR, "inspector_error", exchange.error)
+    if exchange.status in {401, 403, 408, 429}:
+        return CaseOutcome(case_id, required, INCONCLUSIVE, "probe_blocked", f"HTTP {exchange.status}")
+    if exchange.status and exchange.status >= 500:
+        return CaseOutcome(case_id, required, FAIL, "assertion_failed", f"HTTP {exchange.status}")
+    if passed:
+        return CaseOutcome(case_id, required, PASS, "assertions_passed")
+    return CaseOutcome(case_id, required, FAIL if required else INCONCLUSIVE,
+                       "assertion_failed" if required else "capability_unknown", message)
+
+
+def reusable_tool_calls(exchange: Exchange) -> bool:
+    if not valid_tool_call(exchange):
+        return False
+    message = exchange.body["choices"][0]["message"]
+    if message.get("role") != "assistant":
+        return False
+    calls = message["tool_calls"]
+    ids = [call.get("id") for call in calls]
+    return (all(isinstance(id_, str) and id_.strip() for id_ in ids)
+            and len(set(ids)) == len(ids)
+            and all(call.get("type") == "function" for call in calls))
+
+
+def valid_streamed_tool_calls(text: str) -> bool:
+    """Join tool deltas by call index, not by network chunk boundaries."""
+    from .sse import SSEParser
+    parser = SSEParser()
+    events = parser.feed(text.encode("utf-8")) + parser.close()
+    calls: dict[int, dict] = {}
+    done = finished = False
+    for event in events:
+        if done:
+            return False
+        if event.data == "[DONE]":
+            done = True
+            continue
+        try:
+            body = json.loads(event.data)
+        except (ValueError, TypeError):
+            return False
+        if not isinstance(body, dict) or "error" in body:
+            return False
+        choices = body.get("choices")
+        if not isinstance(choices, list):
+            return False
+        for choice in choices:
+            if not isinstance(choice, dict) or type(choice.get("index")) is not int or choice["index"] != 0:
+                return False
+            delta = choice.get("delta")
+            if not isinstance(delta, dict) or (finished and (delta or choice.get("finish_reason"))):
+                return False
+            parts = delta.get("tool_calls", [])
+            if not isinstance(parts, list):
+                return False
+            for part in parts:
+                if not isinstance(part, dict) or type(part.get("index")) is not int or part["index"] < 0:
+                    return False
+                call = calls.setdefault(part["index"], {"id": "", "type": "", "function": {"name": "", "arguments": ""}})
+                for key in ("id", "type"):
+                    value = part.get(key)
+                    if value is not None:
+                        if not isinstance(value, str) or (call[key] and call[key] != value):
+                            return False
+                        call[key] = value
+                function = part.get("function", {})
+                if not isinstance(function, dict):
+                    return False
+                for key in ("name", "arguments"):
+                    value = function.get(key)
+                    if value is not None:
+                        if not isinstance(value, str):
+                            return False
+                        call["function"][key] += value
+            reason = choice.get("finish_reason")
+            if reason is not None:
+                if reason != "tool_calls":
+                    return False
+                finished = True
+    if not done or not finished or not calls or sorted(calls) != list(range(len(calls))):
+        return False
+    reconstructed = Exchange("", "", "POST", "", status=200, body={
+        "choices": [{"finish_reason": "tool_calls", "message": {
+            "role": "assistant", "tool_calls": list(calls.values()),
+        }}],
+    })
+    return reusable_tool_calls(reconstructed)
+
+
+async def case_extensions_tools_stream(
+    session: aiohttp.ClientSession, facts: TargetFacts, *, api_key: str | None = None,
+) -> CaseOutcome:
+    case_id = "extensions.tools_stream"
+    if facts.tools == UNSUPPORTED:
+        return CaseOutcome(case_id, False, SKIPPED, "capability_unsupported")
+    exchange, _ = await _stream_request(
+        session, f"{facts.base_url}/v1/chat/completions",
+        headers=auth_headers(api_key), payload={**tool_request(facts), "stream": True},
+    )
+    exchange.case_id = case_id
+    return capability_result(case_id, exchange,
+        exchange.status == 200 and valid_streamed_tool_calls(exchange.text),
+        required=facts.tools == SUPPORTED,
+        message="未收到完整、可拼接的工具调用，或缺少 tool_calls / [DONE] 结束标记")
+
+
+async def case_extensions_tools_roundtrip(
+    session: aiohttp.ClientSession, facts: TargetFacts, *, api_key: str | None = None,
+) -> CaseOutcome:
+    case_id = "extensions.tools_roundtrip"
+    if facts.tools == UNSUPPORTED:
+        return CaseOutcome(case_id, False, SKIPPED, "capability_unsupported")
+    payload = tool_request(facts)
+    url = f"{facts.base_url}/v1/chat/completions"
+    first = await _request(session, "POST", url, headers=auth_headers(api_key), payload=payload)
+    first.case_id = case_id
+    if not reusable_tool_calls(first):
+        return capability_result(case_id, first, False, required=facts.tools == SUPPORTED,
+                                 message="首轮未返回带唯一调用 ID 的合法工具调用，无法回传结果")
+    message = first.body["choices"][0]["message"]
+    # Simulated results only: never execute a model-provided function.
+    results = [{"role": "tool", "tool_call_id": call["id"],
+                "content": json.dumps({"city": json.loads(call["function"]["arguments"])["city"],
+                                       "temperature": 20, "condition": "sunny"})}
+               for call in message["tool_calls"]]
+    second = await _request(session, "POST", url, headers=auth_headers(api_key), payload={
+        **payload, "tool_choice": "none", "messages": [*payload["messages"], message, *results],
+    })
+    second.case_id = case_id
+    passed = valid_completion(second)
+    if passed:
+        choice = second.body["choices"][0]
+        reply = choice["message"]
+        passed = (choice["finish_reason"] == "stop" and reply.get("role") == "assistant"
+                  and isinstance(reply.get("content"), str) and bool(reply["content"].strip())
+                  and not reply.get("tool_calls") and not reply.get("refusal"))
+    return capability_result(case_id, second, passed, required=True,
+                             message="工具结果回传后，未返回正常结束的非空文本回复")
+
+
+async def case_extensions_structured_output(
+    session: aiohttp.ClientSession, facts: TargetFacts, *, api_key: str | None = None,
+) -> CaseOutcome:
+    case_id = "extensions.structured_output"
+    # Validate the exact fixed schema below, not arbitrary user-defined schemas.
+    schema = {"type": "object", "properties": {
+        "city": {"type": "string"}, "temperature": {"type": "integer"}},
+        "required": ["city", "temperature"], "additionalProperties": False}
+    exchange = await _request(session, "POST", f"{facts.base_url}/v1/chat/completions",
+        headers=auth_headers(api_key), payload={
+            "model": facts.model,
+            "messages": [{"role": "user", "content": "Return Paris and temperature 20 as JSON with city and temperature fields."}],
+            "response_format": {"type": "json_schema", "json_schema": {
+                "name": "weather", "strict": True, "schema": schema}},
+        })
+    exchange.case_id = case_id
+    passed = valid_completion(exchange)
+    if passed:
+        choice = exchange.body["choices"][0]
+        message = choice["message"]
+        if message.get("refusal") or choice["finish_reason"] == "length":
+            return CaseOutcome(case_id, False, INCONCLUSIVE, "structured_output_incomplete",
+                               "回复被拒绝或截断，无法验证完整结构")
+        try:
+            value = json.loads(message.get("content"))
+        except (ValueError, TypeError):
+            value = None
+        passed = (choice["finish_reason"] == "stop" and message.get("role") == "assistant"
+                  and not message.get("tool_calls") and isinstance(value, dict)
+                  and set(value) == {"city", "temperature"} and isinstance(value["city"], str)
+                  and (type(value["temperature"]) is int or
+                       (type(value["temperature"]) is float and math.isfinite(value["temperature"])
+                        and value["temperature"].is_integer())))
+    # Support is not advertised during discovery. Rejection is inconclusive;
+    # an accepted complete response is checked against the requested schema.
+    return capability_result(case_id, exchange, passed, required=exchange.status == 200,
+                             message="输出不是合法 JSON，或字段、类型不符合指定结构")
+
+
 def thinking_request(facts: TargetFacts, enabled: bool) -> dict:
     return {
         **baseline_payload(facts),
@@ -787,10 +1024,12 @@ async def case_extensions_thinking(
     if on.status and 400 <= on.status < 500:
         if required:
             return CaseOutcome(case_id, True, FAIL, "assertion_failed", "declared thinking but refused it")
-        return CaseOutcome(case_id, False, SKIPPED, "capability_unsupported")
+        return CaseOutcome(case_id, False, INCONCLUSIVE, "capability_unknown", on.text)
 
     off = await _request(session, "POST", url, headers=headers, payload=thinking_request(facts, False))
 
+    if off.error:
+        return CaseOutcome(case_id, required, ERROR, "inspector_error", off.error)
     if not valid_completion(on) or not valid_completion(off):
         return CaseOutcome(case_id, required, FAIL, "assertion_failed", "a response was malformed")
     if not has_reasoning(on):
@@ -908,7 +1147,15 @@ async def case_disruption_abort_storm(
         detail.append(f"{len(bad_survivors)}/{len(survivors)} survivors disturbed")
     if bad_canaries:
         detail.append(f"{len(bad_canaries)}/{len(canary_results)} canaries disturbed")
-    return CaseOutcome(case_id, True, FAIL, "assertion_failed", "; ".join(detail))
+    if any(not exchange.error for exchange in [*bad_survivors, *bad_canaries]) or any(
+        exchange.status is not None and exchange.status >= 500 for _, exchange, _ in bad_aborts
+    ):
+        return CaseOutcome(case_id, True, FAIL, "assertion_failed", "; ".join(detail))
+    if any(exchange.error for exchange in [*bad_survivors, *bad_canaries]) or any(
+        exchange.error for _, exchange, _ in bad_aborts
+    ):
+        return CaseOutcome(case_id, True, ERROR, "inspector_error", "; ".join(detail))
+    return CaseOutcome(case_id, True, INCONCLUSIVE, "abort_not_established", "; ".join(detail))
 
 
 def _aborted_correctly(exchange: Exchange, stream: dict, threshold: int) -> bool:
@@ -946,20 +1193,24 @@ async def verify_recovery(
     """
     headers = auth_headers(api_key)
     url = f"{facts.base_url}/v1/chat/completions"
-    deadline = time.monotonic() + RECOVERY_DEADLINE_SECONDS
     consecutive = 0
-
-    while time.monotonic() < deadline and consecutive < RECOVERY_ROUNDS:
-        health, chat = await asyncio.gather(
-            _request(session, "GET", f"{facts.base_url}{HEALTH_PATH}", headers=headers),
-            _request(session, "POST", url, headers=headers, payload=baseline_payload(facts)),
-        )
-        # Concurrently, because a service that can only do one thing at a time
-        # is not recovered.
-        consecutive = consecutive + 1 if (health.status == 200 and valid_completion(chat)) else 0
-        if consecutive >= RECOVERY_ROUNDS:
-            return True
-        await asyncio.sleep(0.5)
+    observed_failure = False
+    try:
+        async with asyncio.timeout(RECOVERY_DEADLINE_SECONDS):
+            while consecutive < RECOVERY_ROUNDS:
+                health, chat = await asyncio.gather(
+                    _request(session, "GET", f"{facts.base_url}{HEALTH_PATH}", headers=headers),
+                    _request(session, "POST", url, headers=headers, payload=baseline_payload(facts)),
+                )
+                if (not health.error and health.status != 200) or (not chat.error and not valid_completion(chat)):
+                    observed_failure = True
+                consecutive = consecutive + 1 if (health.status == 200 and valid_completion(chat)) else 0
+                if consecutive >= RECOVERY_ROUNDS:
+                    return True
+                await asyncio.sleep(0.5)
+    except TimeoutError:
+        if not observed_failure:
+            raise TimeoutError("recovery deadline expired without enough usable evidence") from None
     return False
 
 
@@ -1024,6 +1275,9 @@ def catalogue() -> list[Case]:
         # Capability cases: their own verdict carries whether they were
         # required, which depends on what the service advertised.
         Case("extensions.tools", case_extensions_tools, required=False),
+        Case("extensions.tools_stream", case_extensions_tools_stream, required=False),
+        Case("extensions.tools_roundtrip", case_extensions_tools_roundtrip, required=False),
+        Case("extensions.structured_output", case_extensions_structured_output, required=False),
         Case("extensions.thinking", case_extensions_thinking, required=False),
         # Last, and the only disruptive one: it aborts generations on purpose,
         # so anything after it would be measuring the aftermath.
@@ -1041,18 +1295,18 @@ def catalogue() -> list[Case]:
 
 
 def aggregate(cases: list[CaseOutcome]) -> str:
-    """The Run's verdict, from the cases'.
+    """Preserve observed failures/errors; lack of coverage is never success.
 
-    Only required cases move it. A capability the service never claimed cannot
-    fail it, and an optional case that went wrong is worth reporting without
-    being worth a red light.
+    Optional capabilities report absent/unknown as SKIPPED/INCONCLUSIVE.
+    An actual FAIL (including HTTP 5xx) remains a failure regardless of that flag.
     """
-    required = [case for case in cases if case.required]
-    if any(case.verdict in (FAIL, ERROR) for case in required):
+    if any(case.verdict == FAIL for case in cases):
         return FAIL
-    if any(case.verdict == INCONCLUSIVE for case in required):
+    if any(case.verdict == ERROR for case in cases):
+        return ERROR
+    if any(case.required and case.verdict in (INCONCLUSIVE, SKIPPED) for case in cases):
         return INCONCLUSIVE
-    return PASS
+    return PASS if any(case.verdict == PASS for case in cases) else INCONCLUSIVE
 
 
 EventSink = Callable[[dict], None]
@@ -1064,6 +1318,7 @@ async def run_inspection(
     api_key: str | None = None,
     on_event: EventSink | None = None,
     selected_case_ids: list[str] | None = None,
+    case_timeouts: dict[str, float] | None = None,
 ) -> RunSummary:
     """Inspect one service. Never raises for a service's behaviour — only a
     failed discovery is fatal, because nothing can be judged without it."""
@@ -1076,16 +1331,17 @@ async def run_inspection(
     try:
         facts, _ = await discover(base_url, api_key=api_key)
     except DiscoveryError as exc:
-        summary.run_verdict = FAIL
+        summary.run_verdict = INCONCLUSIVE
         summary.cases.append(
-            CaseOutcome("discovery", True, FAIL, "discovery_failed", str(exc))
+            CaseOutcome("discovery", True, INCONCLUSIVE, "discovery_failed", str(exc))
         )
         emit({"type": "discovery_failed", "message": str(exc)})
         return summary
     summary.target = facts
     emit({"type": "discovered", "target": facts.as_dict()})
 
-    timeout = aiohttp.ClientTimeout(total=CASE_TIMEOUT_SECONDS)
+    # The per-case deadline owns the entire request budget, including multi-request cases.
+    timeout = aiohttp.ClientTimeout(total=None)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         run_unsafe = False
         selected = set(selected_case_ids) if selected_case_ids is not None else None
@@ -1102,7 +1358,8 @@ async def run_inspection(
                     emit({"type": "case_started", "case_id": case.case_id})
                     try:
                         outcome = await asyncio.wait_for(
-                            case.run(session, facts, api_key=api_key), timeout=case.timeout_seconds
+                            case.run(session, facts, api_key=api_key),
+                            timeout=(case_timeouts or {}).get(case.case_id, case.timeout_seconds),
                         )
                     except asyncio.TimeoutError:
                         outcome = CaseOutcome(
@@ -1114,14 +1371,29 @@ async def run_inspection(
                             traceback.format_exc(),
                         )
 
-                    if case.recovery_required and outcome.verdict == PASS:
-                        # Recovery requests belong to the same case evidence.
-                        if not await verify_recovery(session, facts, api_key=api_key):
-                            outcome = CaseOutcome(
-                                case.case_id, outcome.required, FAIL, "recovery_failed",
-                                "the service did not come back after the disruption",
-                            )
+                    if case.recovery_required:
+                        # Check even after failure/timeout and retain the original evidence.
+                        original = outcome
+                        try:
+                            recovered = await verify_recovery(session, facts, api_key=api_key)
+                        except Exception:
+                            recovered = None
+                            recovery_detail = traceback.format_exc()
+                        if recovered is not True:
                             run_unsafe = True
+                            recovery_message = (
+                                "recovery could not be verified within its deadline"
+                                if recovered is False else f"recovery inspector error: {recovery_detail}"
+                            )
+                            if original.verdict == PASS:
+                                outcome = CaseOutcome(
+                                    case.case_id, original.required,
+                                    FAIL if recovered is False else ERROR,
+                                    "recovery_failed" if recovered is False else "recovery_error", recovery_message,
+                                )
+                            else:
+                                outcome.message = f"{original.message}\n{recovery_message}".strip()
+
             finally:
                 _evidence_sink.reset(token)
 

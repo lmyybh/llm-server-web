@@ -152,7 +152,8 @@ def test_tool_probe_requires_tool_calls_finish_reason(finish_reason, expected):
     async def scenario():
         async def completion(request):
             payload = await request.json()
-            assert set(payload) == {"model", "messages", "tools"}
+            assert set(payload) == {"model", "messages", "tools", "tool_choice"}
+            assert payload["tool_choice"] == {"type": "function", "function": {"name": "get_weather"}}
             assert payload["model"] == "test-model"
             assert payload["messages"] == [{"role": "user", "content": "What's the weather in Paris?"}]
             assert payload["tools"] == [{
@@ -212,7 +213,13 @@ def test_context_overflow_probe_does_not_limit_output_tokens():
             assert "max_tokens" not in payload
             return web.json_response({"error": {"message": "context too long"}}, status=400)
 
+        async def tokenize(request):
+            payload = await request.json()
+            assert payload["messages"][0]["content"] == "x " * 72
+            return web.json_response({"count": 72})
+
         app = web.Application()
+        app.router.add_post("/v1/tokenize", tokenize)
         app.router.add_post("/v1/chat/completions", completion)
         runner = web.AppRunner(app)
         await runner.setup()
@@ -253,12 +260,12 @@ class TestAggregate:
     def test_a_required_failure_fails_the_run(self):
         assert aggregate([self.outcome(PASS), self.outcome(FAIL)]) == FAIL
 
-    def test_a_required_error_fails_the_run(self):
-        assert aggregate([self.outcome(ERROR)]) == FAIL
+    def test_a_required_error_remains_an_error(self):
+        assert aggregate([self.outcome(ERROR)]) == ERROR
 
-    def test_an_optional_failure_does_not_fail_the_run(self):
-        """A capability the service never claimed cannot fail it."""
-        assert aggregate([self.outcome(PASS), self.outcome(FAIL, required=False)]) == PASS
+    def test_an_observed_failure_also_fails_optional_cases(self):
+        """Absent capabilities skip; an observed failure must not be hidden."""
+        assert aggregate([self.outcome(PASS), self.outcome(FAIL, required=False)]) == FAIL
 
     def test_inconclusive_is_reported_as_itself(self):
         """Not a pass, and emphatically not a failure."""
@@ -268,7 +275,7 @@ class TestAggregate:
         assert aggregate([self.outcome(INCONCLUSIVE), self.outcome(FAIL)]) == FAIL
 
     def test_skipped_does_not_affect_the_verdict(self):
-        assert aggregate([self.outcome(PASS), self.outcome(SKIPPED)]) == PASS
+        assert aggregate([self.outcome(PASS), self.outcome(SKIPPED, required=False)]) == PASS
 
 
 # --- discovery helpers ------------------------------------------------------

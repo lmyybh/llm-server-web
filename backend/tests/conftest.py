@@ -20,7 +20,7 @@ def no_spawn(monkeypatch):
     from server import supervisor
 
     monkeypatch.setattr(supervisor, "submit", lambda db_path, cell_id: True)
-    monkeypatch.setattr(supervisor, "spawn_inspection", lambda db_path, run_id: 0)
+    monkeypatch.setattr(supervisor, "spawn_inspection", lambda db_path, run_id, **kwargs: 0)
 
 
 @pytest.fixture

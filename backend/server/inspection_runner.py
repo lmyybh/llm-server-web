@@ -1,9 +1,7 @@
 """The inspection executor subprocess: one process per Inspection Run.
 
-Deliberately not queued behind bench Runs. An inspection is short and light,
-and its whole value is answering "is this service alright *now*" — making it
-wait behind a forty-minute sweep would make it useless for the question it
-exists to answer.
+Inspections start immediately only when their target is free. Benchmark and
+inspection processes targeting the same URL cannot overlap.
 
 Writes the case results and progress; the backend owns the status, as with a
 bench Run.
@@ -18,7 +16,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from llmbench.inspection import SUITE_VERSION, FAIL, run_inspection
+from llmbench.inspection import SUITE_VERSION, ERROR, run_inspection
 
 from . import store
 from .config import database_path
@@ -28,9 +26,11 @@ async def execute(inspection_run_id: int, db_path: Path) -> None:
     connection = store.connect(db_path)
     try:
         run = store.get_inspection_run(connection, inspection_run_id)
+        if run["status"] in store.TERMINAL_STATUSES:
+            return
         service = store.get_service(connection, run["service_id"])
         # Read here, from this process's environment, and never persisted.
-        api_key = os.environ.get(service["api_key_env"]) or None
+        api_key = os.environ.get(os.environ.get("LLMBENCH_INSPECTION_KEY_ENV", service["api_key_env"])) or None
 
         def on_event(event: dict) -> None:
             if event["type"] == "discovered":
@@ -52,8 +52,10 @@ async def execute(inspection_run_id: int, db_path: Path) -> None:
                 )
 
         summary = await run_inspection(
-            service["router_url"], api_key=api_key, on_event=on_event,
+            os.environ.get("LLMBENCH_INSPECTION_TARGET_URL", service["router_url"]),
+            api_key=api_key, on_event=on_event,
             selected_case_ids=run["case_ids"],
+            case_timeouts={c["case_id"]: c["timeout_seconds"] for c in run["case_settings"]},
         )
 
         # Also cover discovery failure and preserve evidence already written
@@ -84,7 +86,7 @@ def record_failure(db_path: Path, inspection_run_id: int, exc: BaseException) ->
         return
     try:
         store.set_inspection_status(
-            connection, inspection_run_id, "failed", error=detail, verdict=FAIL
+            connection, inspection_run_id, "failed", error=detail, verdict=ERROR
         )
     except Exception:
         pass

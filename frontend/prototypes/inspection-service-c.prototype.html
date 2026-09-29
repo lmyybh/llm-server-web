@@ -46,7 +46,7 @@
       {id:"context.overflow",title:"超出上下文长度",group:"边界行为",method:"POST",path:"/v1/chat/completions",body:{model:"DeepSeek-V4-Flash",messages:[{role:"user",content:"x ".repeat(120)}],max_tokens:1}},
       {id:"extensions.tools",title:"工具调用能力",group:"可选能力",method:"POST",path:"/v1/chat/completions",body:{model:"DeepSeek-V4-Flash",messages:[{role:"user",content:"What is the weather?"}],tools:[{type:"function",function:{name:"weather",parameters:{type:"object"}}}]}},
       {id:"extensions.thinking",title:"思考模式开关",group:"可选能力",method:"POST",path:"/v1/chat/completions",body:{model:"DeepSeek-V4-Flash",messages:[{role:"user",content:"Solve 2+2"}],extra_body:{enable_thinking:true}}},
-      {id:"disruption.abort_storm",title:"客户端中断恢复",group:"扰动恢复",method:"POST",path:"/v1/chat/completions",body:{model:"DeepSeek-V4-Flash",messages:[{role:"user",content:"Generate a long response"}],stream:true,max_tokens:256}}
+      {id:"disruption.abort_storm",title:"客户端中断场景",group:"扰动恢复",method:"POST",path:"/v1/chat/completions",body:{model:"DeepSeek-V4-Flash",messages:[{role:"user",content:"Generate a long response"}],stream:true,max_tokens:256}}
     ];
     const errorText = 'AssertionError: malformed request was accepted\nExpected HTTP 400 or 422; received HTTP 200.\n\nRequest: POST /v1/chat/completions\nBody: {"model":\n\nResponse: {"id":"chatcmpl-9d1","choices":[{"message":{"role":"assistant","content":""}}]}\n\nTrace:\n  at validation.malformed_json (inspection.py:514)\n  at run_case (inspection.py:1021)\n  at run_inspection (inspection.py:1038)';
     const serviceUrl = "http://10.56.0.146:32110";

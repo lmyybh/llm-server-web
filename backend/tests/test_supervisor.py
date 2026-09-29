@@ -404,3 +404,20 @@ def test_requeueing_clears_the_previous_runs_progress(client):
     queued = client.get(f"/api/cells/{cell['id']}").json()
     assert queued["status"] == "queued"
     assert queued["progress"] is None
+
+
+def test_inspection_process_records_discovery_failure_without_service_failure(live_client):
+    service = live_client.post('/api/services', json={'name': 'offline', 'router_url': DEAD_URL}).json()
+    run = live_client.post(f"/api/services/{service['id']}/inspections").json()
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        result = live_client.get(f"/api/inspections/{run['id']}").json()
+        busy = any(db == live_client.app.state.db_path.resolve() for db, _ in supervisor._active_targets)
+        if result['status'] in store.TERMINAL_STATUSES and not busy:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail('inspection process did not finish and release its target')
+    assert result['status'] == 'failed'
+    assert result['verdict'] == 'INCONCLUSIVE'
+    assert result['cases'][0]['reason_code'] == 'discovery_failed'

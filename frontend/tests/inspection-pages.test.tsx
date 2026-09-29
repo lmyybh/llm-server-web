@@ -95,7 +95,7 @@ test("configured cases are used for the next inspection", async () => {
   const dialog = screen.getByRole("dialog", { name: "配置巡检项" });
   await userEvent.click(within(dialog).getByRole("checkbox", { name: /工具调用能力/ }));
   await userEvent.click(within(dialog).getByRole("button", { name: "保存配置" }));
-  expect(await screen.findByText("已启用 1 / 4 项")).toBeInTheDocument();
+  await waitFor(() => expect(dialog).not.toBeInTheDocument());
   await userEvent.click(screen.getByRole("button", { name: "开始巡检" }));
   expect(await screen.findByText("用例进度 0 / 1")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /^巡检 #1/ })).toBeInTheDocument();
@@ -297,4 +297,14 @@ test("a discovery failure remains visible", async () => {
 test("cURL quoting keeps apostrophes inside a single shell argument", () => {
   expect(curlCommand({ ...exchange, request_body: "it's ready" }, "LLM_API_KEY"))
     .toContain("'it'\\''s ready'");
+});
+
+test.each(["ERROR", "INCONCLUSIVE"] as const)("run verdict %s is visible without claiming service failure", async (verdict) => {
+  vi.stubGlobal("fetch", fakeApi({ services: [makeService()], inspections: [makeInspection({
+    status: "completed", verdict, cases: [], completed_cases: 0,
+  })] }));
+  render(<InspectionPage />);
+  expect((await screen.findAllByText(verdict === "ERROR" ? "执行出错" : "无法判定")).length).toBeGreaterThan(0);
+  expect(screen.queryByText("失败")).not.toBeInTheDocument();
+  expect(screen.queryByText("通过")).not.toBeInTheDocument();
 });

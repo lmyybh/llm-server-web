@@ -165,6 +165,34 @@ class InspectionCaseSelection(BaseModel):
     case_ids: list[str] = Field(min_length=1)
 
 
+class InspectionCaseUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=60)
+    group: str | None = Field(default=None, min_length=1, max_length=30)
+    timeout_seconds: int | None = Field(default=None, ge=1, le=900, strict=True)
+    default_enabled: bool | None = Field(default=None, strict=True)
+
+    @field_validator("title")
+    @classmethod
+    def trim_title(cls, value: str | None) -> str:
+        if value is None or not value.strip():
+            raise ValueError("请输入项目名称")
+        return value.strip()
+
+    @field_validator("group")
+    @classmethod
+    def trim_group(cls, value: str | None) -> str:
+        if value is None or not value.strip():
+            raise ValueError("请输入分组标签")
+        return value.strip()
+
+    @field_validator("timeout_seconds", "default_enabled")
+    @classmethod
+    def reject_null(cls, value):
+        if value is None:
+            raise ValueError("设置不能为空")
+        return value
+
+
 class WorkloadCreate(BaseModel):
     """A preset load shape in the **global** Workload library.
 

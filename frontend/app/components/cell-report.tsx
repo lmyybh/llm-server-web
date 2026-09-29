@@ -1,6 +1,6 @@
 "use client";
 
-import type { Cell } from "../lib/api";
+import { artifactsZipUrl, type Cell } from "../lib/api";
 import { format, formatMs, relativeTime } from "./cell";
 
 type SummaryKey = "ttft_ms" | "tpot_ms" | "e2e_ms" | "input_tokens" | "output_tokens";
@@ -147,6 +147,12 @@ export function CellReport({ cell }: { cell: Cell }) {
         </div>
         <MetricTable cell={cell} kind="tokens" />
       </section>
+      <p className="text-xs text-neutral-500 dark:text-neutral-400">
+        计时从请求真正发出的那一刻起算，排队等待并发许可的时间不计入；这里展示的是服务时间，而不是用户感知的响应时间。
+      </p>
+      <a href={artifactsZipUrl(cell.id)} className="self-start text-xs text-blue-600 hover:underline dark:text-blue-400">
+        下载全部产物
+      </a>
       <p className="text-[10px] text-neutral-400">实际并发为同时在途请求数的时间平均值；“—”表示这次测量未记录该指标。</p>
     </div>
   );

@@ -16,7 +16,7 @@ PAYLOAD = {"name": "灰度服务", "router_url": "http://host:9000", "api_key_en
 
 @pytest.fixture(autouse=True)
 def no_spawn(monkeypatch):
-    monkeypatch.setattr(supervisor, "spawn_inspection", lambda db_path, run_id: 0)
+    monkeypatch.setattr(supervisor, "spawn_inspection", lambda db_path, run_id, **kwargs: 0)
 
 
 @pytest.fixture
@@ -177,6 +177,7 @@ def test_completed_case_evidence_is_available_before_the_run_finishes(client, se
 
 def test_inspections_are_listed_newest_first(client, service_id):
     first = client.post(f"/api/services/{service_id}/inspections").json()
+    client.post(f"/api/inspections/{first['id']}/cancel")
     second = client.post(f"/api/services/{service_id}/inspections").json()
     listed = client.get(f"/api/services/{service_id}/inspections").json()
     assert [run["id"] for run in listed] == [second["id"], first["id"]]
@@ -287,3 +288,83 @@ def model_id_blocking(client, deployment_payload):
         f"/api/models/{model['id']}/deployments",
         json={**deployment_payload, "router_url": "http://127.0.0.1:9"},
     ).json()["id"]
+
+
+def test_default_cases_exclude_disruption(client, service_id):
+    assert 'disruption.abort_storm' not in client.get(f'/api/services/{service_id}').json()['enabled_case_ids']
+
+
+def test_same_target_inspections_cannot_overlap(client, service_id):
+    assert client.post(f'/api/services/{service_id}/inspections').status_code == 201
+    other = client.post('/api/services', json={**PAYLOAD, 'name': 'same target'}).json()
+    assert client.post(f"/api/services/{other['id']}/inspections").status_code == 409
+    assert client.get(f"/api/services/{other['id']}/inspections").json() == []
+
+
+def test_inspection_refuses_target_with_running_benchmark(client, cell_id, deployment_payload):
+    service = client.post('/api/services', json={**PAYLOAD, 'router_url': deployment_payload['router_url']}).json()
+    connection = store.connect(client.app.state.db_path)
+    try:
+        store.set_cell_status(connection, cell_id, 'running')
+    finally:
+        connection.close()
+    assert client.post(f"/api/services/{service['id']}/inspections").status_code == 409
+
+
+def test_queued_benchmark_waits_for_inspection(client, cell_id, deployment_payload):
+    service = client.post('/api/services', json={**PAYLOAD, 'router_url': deployment_payload['router_url']}).json()
+    run = client.post(f"/api/services/{service['id']}/inspections").json()
+    connection = store.connect(client.app.state.db_path)
+    try:
+        store.queue_cell(connection, cell_id)
+        assert store.startable_queued_cell_ids(connection) == []
+        store.set_inspection_status(connection, run['id'], 'completed', verdict='PASS')
+        assert store.startable_queued_cell_ids(connection) == [cell_id]
+    finally:
+        connection.close()
+
+
+def test_cancelled_inspection_cannot_return_to_running(client, service_id):
+    connection = store.connect(client.app.state.db_path)
+    try:
+        run = store.create_inspection_run(connection, service_id)
+        store.cancel_inspection_run(connection, run['id'])
+        assert not store.set_inspection_status(connection, run['id'], 'running')
+        assert store.get_inspection_run(connection, run['id'])['status'] == 'cancelled'
+    finally:
+        connection.close()
+
+
+def test_cancel_keeps_target_busy_until_child_exits(client, service_id, monkeypatch):
+    import io
+    from types import SimpleNamespace
+
+    db_path = client.app.state.db_path
+    run = client.post(f'/api/services/{service_id}/inspections').json()
+    pid = 123456
+    monkeypatch.setitem(supervisor._active_targets, (db_path.resolve(), pid), PAYLOAD['router_url'])
+    monkeypatch.setattr(supervisor, 'terminate', lambda _pid: None)
+    connection = store.connect(db_path)
+    try:
+        store.set_inspection_status(connection, run['id'], 'running', pid=pid)
+    finally:
+        connection.close()
+    assert client.post(f"/api/inspections/{run['id']}/cancel").status_code == 200
+    assert client.post(f'/api/services/{service_id}/inspections').status_code == 409
+    resumed = []
+    monkeypatch.setattr(supervisor, '_start_available', lambda path: resumed.append(path))
+    supervisor._supervise_inspection(db_path, run['id'], SimpleNamespace(pid=pid, wait=lambda: -15), io.BytesIO())
+    assert resumed == [db_path]
+    assert client.get(f"/api/inspections/{run['id']}").json()['status'] == 'cancelled'
+    assert client.post(f'/api/services/{service_id}/inspections').status_code == 201
+
+
+def test_spawn_failure_is_an_execution_error_and_releases_target(client, service_id, monkeypatch):
+    def fail(*args, **kwargs):
+        raise OSError('cannot spawn')
+    monkeypatch.setattr(supervisor, 'spawn_inspection', fail)
+    run = client.post(f'/api/services/{service_id}/inspections').json()
+    assert run['status'] == 'failed'
+    assert run['verdict'] == 'ERROR'
+    monkeypatch.setattr(supervisor, 'spawn_inspection', lambda *args, **kwargs: 0)
+    assert client.post(f'/api/services/{service_id}/inspections').status_code == 201

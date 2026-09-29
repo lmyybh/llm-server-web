@@ -34,11 +34,12 @@ const SECTIONS: { label: string; items: NavItem[] }[] = [
     items: [
       { href: "/workloads", label: "负载库", owns: (path) => path.startsWith("/workloads") },
       { href: "/suites", label: "压测组合", owns: (path) => path.startsWith("/suites") },
+      { href: "/inspection-projects", label: "巡检项目", owns: (path) => path.startsWith("/inspection-projects") },
     ],
   },
 ];
 
-const ITEM_ICONS: Record<string, string> = { 压测: "◉", 负载库: "▦", 压测组合: "▤", 巡检: "⌁" };
+const ITEM_ICONS: Record<string, string> = { 压测: "◉", 负载库: "▦", 压测组合: "▤", 巡检: "⌁", 巡检项目: "☷" };
 
 /** The sidebar's section links, with the current section highlighted. */
 export function Nav() {

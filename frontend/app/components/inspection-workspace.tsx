@@ -5,6 +5,7 @@ import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Dialog from "@radix-ui/react-dialog";
 
 import { CheckIcon, CopyIcon } from "./icons";
+import { VerdictBadge } from "./inspection";
 import { Button, ErrorBanner, IconButton, Surface } from "./ui";
 import type {
   InspectionCase,
@@ -235,8 +236,9 @@ export function InspectionTimeline({ run, service, catalogue }: {
         <div>
           <h2 className="flex items-center gap-2 text-base font-semibold">
             巡检 #{run.id}
+            {run.verdict ? <VerdictBadge verdict={run.verdict} /> : null}
             <span className={failed ? failureBadgeClass : `rounded-md px-2 py-0.5 text-[10px] font-semibold ${run.status === "completed" ? "bg-emerald-50 text-emerald-700" : "bg-blue-50 text-blue-700"}`}>
-              {run.status === "queued" ? "排队中" : run.status === "running" ? "执行中" : failed ? "失败" : run.status === "completed" ? "已完成" : "已取消"}
+              {run.status === "queued" ? "排队中" : run.status === "running" ? "执行中" : run.status === "failed" && run.verdict !== "FAIL" ? "执行未完成" : failed ? "失败" : run.status === "completed" ? "已完成" : "已取消"}
             </span>
           </h2>
           <p className="mt-1 text-xs text-slate-500">{new Date(run.queued_at).toLocaleString()} · {total} 项巡检</p>
@@ -298,9 +300,10 @@ export function InspectionHistory({ runs, activeId, onSelect, onDelete }: {
     if (run.status === "queued") return { label: "排队中", color: "text-slate-500" };
     if (run.status === "running") return { label: "执行中", color: "text-blue-600 dark:text-blue-400" };
     if (run.status === "cancelled") return { label: "已取消", color: "text-slate-500" };
+    if (run.verdict === "ERROR") return { label: "执行出错", color: "text-amber-600 dark:text-amber-400" };
+    if (run.verdict === "INCONCLUSIVE") return { label: "无法判定", color: "text-amber-600 dark:text-amber-400" };
     if (run.status === "failed" || run.verdict === "FAIL") return { label: "失败", color: failureBadgeClass };
     if (run.verdict === "PASS") return { label: "通过", color: successBadgeClass };
-    if (run.verdict === "INCONCLUSIVE") return { label: "无法判定", color: "text-amber-600 dark:text-amber-400" };
     return { label: "已完成", color: "text-slate-500" };
   };
 
@@ -383,12 +386,12 @@ export function InspectionCaseConfig({ service, catalogue, onSave }: {
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-slate-950/45" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-50 flex max-h-[85vh] w-[calc(100%_-_2rem)] max-w-xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-neutral-700 dark:bg-neutral-900">
-          <div className="border-b border-slate-200 p-5 dark:border-neutral-800"><Dialog.Title className="text-base font-semibold">配置巡检项</Dialog.Title><Dialog.Description className="mt-1 text-xs text-slate-500">勾选后，新建的巡检记录按此配置执行；历史记录保持原样。</Dialog.Description></div>
+          <div className="border-b border-slate-200 p-5 dark:border-neutral-800"><Dialog.Title className="text-base font-semibold">配置巡检项</Dialog.Title><Dialog.Description className="mt-1 text-xs text-slate-500">基础巡检默认不含中断扰动。勾选专项扰动后，新建记录会执行该测试；历史记录保持原样。</Dialog.Description></div>
           <div className="min-h-0 overflow-y-auto px-5 py-3">{groups.map((group) => (
             <section key={group} className="py-2"><h3 className="mb-2 text-xs font-semibold text-slate-500">{group}</h3>{catalogue.filter((entry) => entry.group === group).map((entry) => (
               <label key={entry.case_id} className="flex cursor-pointer items-start gap-3 rounded-lg px-2 py-2 hover:bg-slate-50 dark:hover:bg-neutral-800">
                 <input type="checkbox" checked={draft.includes(entry.case_id)} onChange={(event) => setDraft((old) => event.target.checked ? [...old, entry.case_id] : old.filter((id) => id !== entry.case_id))} className="mt-0.5 h-4 w-4 accent-blue-600" />
-                <span><span className="block text-sm font-medium">{entry.title}</span><span className="block font-mono text-[11px] text-slate-400">{entry.case_id}</span></span>
+                <span><span className="block text-sm font-medium">{entry.title}</span><span className="block font-mono text-[11px] text-slate-400">{entry.case_id}</span>{entry.case_id === "disruption.abort_storm" ? <span className="mt-1 block text-xs text-amber-700 dark:text-amber-400">专项扰动测试：最多同时发起 36 个请求并主动中断部分连接，完成后检查恢复。</span> : null}</span>
               </label>
             ))}</section>
           ))}</div>

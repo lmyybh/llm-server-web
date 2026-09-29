@@ -101,7 +101,6 @@ export default function ServicePage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{service?.name ?? "…"}</h1>
           <p className="mt-1 break-all font-mono text-xs text-slate-500">{service?.router_url}</p>
-          {service ? <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-slate-600 dark:text-neutral-400"><span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950">服务已登记</span><span className="rounded-full border border-slate-200 px-2.5 py-1 dark:border-neutral-700">已启用 {service.enabled_case_ids.length} / {catalogue.length} 项</span></div> : null}
         </div>
         <div className="flex flex-wrap gap-2">
           {service && catalogue.length ? <InspectionCaseConfig service={service} catalogue={catalogue} onSave={saveCases} /> : null}

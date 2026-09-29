@@ -38,6 +38,15 @@ const WORKLOADS = [
   }),
 ];
 
+// Match the row's visible fields independently of CSS whitespace and request counts.
+function cellRow(level: number, status: string) {
+  return {
+    name: (_name: string, element: Element) => element instanceof HTMLElement
+      && within(element).queryByText(String(level), { exact: true }) !== null
+      && within(element).queryByText(status, { exact: true }) !== null,
+  };
+}
+
 // --- configuring ------------------------------------------------------------
 
 test("a deployment with no cells says how to start", async () => {
@@ -50,7 +59,7 @@ test("an empty workload library offers to create one inline", async () => {
   vi.stubGlobal("fetch", fakeApi({ ...SEED, workloads: [] }));
   render(<DeploymentPage />);
   await userEvent.click(await screen.findByRole("button", { name: /添加负载/ }));
-  expect(await screen.findByText(/负载库里还没有任何负载/)).toBeInTheDocument();
+  expect(await screen.findByText(/没有可选的已有负载/)).toBeInTheDocument();
   expect(screen.getByLabelText("名称")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "创建并添加" })).toBeInTheDocument();
 });
@@ -67,7 +76,7 @@ test("adding a workload needs no bench configuration", async () => {
   expect(within(dialog).queryByLabelText("档位")).not.toBeInTheDocument();
   await userEvent.click(within(dialog).getByRole("button", { name: "添加" }));
 
-  expect(await screen.findByText(/已添加，还没有测试项/)).toBeInTheDocument();
+  expect(await screen.findAllByText("暂无测试项")).toHaveLength(2);
   expect(screen.getByText("synthetic-1024-128")).toBeInTheDocument();
   const cellPosts = fetcher.mock.calls.filter(
     (call) => call[1]?.method === "POST" && String(call[0]).endsWith("/cells"),
@@ -111,8 +120,10 @@ test("an added workload with no cells can be removed again", async () => {
   );
   render(<DeploymentPage />);
 
-  await screen.findByText(/已添加，还没有测试项/);
-  await userEvent.click(screen.getByRole("button", { name: "移除" }));
+  await screen.findByRole("heading", { name: "synthetic-1024-128" });
+  await userEvent.click(screen.getByRole("button", { name: "删除" }));
+  const confirmation = await screen.findByRole("dialog", { name: /删除/ });
+  await userEvent.click(within(confirmation).getByRole("button", { name: "确认删除" }));
   await waitFor(() =>
     expect(screen.queryByText("synthetic-1024-128")).not.toBeInTheDocument(),
   );
@@ -162,13 +173,13 @@ test("a ladder expands into one cell per level", async () => {
       name: "添加",
     }),
   );
-  await userEvent.click(await screen.findByRole("button", { name: /添加测试/ }));
+  await userEvent.click(await screen.findByRole("button", { name: "添加并发测试" }));
   await userEvent.type(screen.getByLabelText("档位"), "1, 4, 16");
   await userEvent.click(screen.getByRole("button", { name: "创建 Cell" }));
 
-  expect(await screen.findByRole("button", { name: /^1\s*待运行/ })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /^4\s*待运行/ })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /^16\s*待运行/ })).toBeInTheDocument();
+  expect(await screen.findByRole("button", cellRow(1, "待运行"))).toBeInTheDocument();
+  expect(screen.getByRole("button", cellRow(4, "待运行"))).toBeInTheDocument();
+  expect(screen.getByRole("button", cellRow(16, "待运行"))).toBeInTheDocument();
 
   const posted = fetcher.mock.calls.find(
     (call) => call[1]?.method === "POST" && String(call[0]).endsWith("/cells"),
@@ -192,14 +203,14 @@ test("a single request count broadcasts; several pair with the levels", async ()
   vi.stubGlobal("fetch", fetcher);
   render(<DeploymentPage />);
 
-  await userEvent.click(await screen.findByRole("button", { name: /添加测试/ }));
+  await userEvent.click(await screen.findByRole("button", { name: "添加并发测试" }));
   await userEvent.type(screen.getByLabelText("档位"), "1, 4");
   const requestsField = screen.getByLabelText("请求数量");
   await userEvent.clear(requestsField);
   await userEvent.type(requestsField, "32, 128");
   await userEvent.click(screen.getByRole("button", { name: "创建 Cell" }));
 
-  expect(await screen.findByRole("button", { name: /^1\s*待运行/ })).toBeInTheDocument();
+  expect(await screen.findByRole("button", cellRow(1, "待运行"))).toBeInTheDocument();
   const posted = fetcher.mock.calls.find(
     (call) => call[1]?.method === "POST" && String(call[0]).endsWith("/cells"),
   );
@@ -216,7 +227,7 @@ test("several request counts must match the ladder's length", async () => {
   );
   render(<DeploymentPage />);
 
-  await userEvent.click(await screen.findByRole("button", { name: /添加测试/ }));
+  await userEvent.click(await screen.findByRole("button", { name: "添加并发测试" }));
   await userEvent.type(screen.getByLabelText("档位"), "1, 4");
   const requestsField = screen.getByLabelText("请求数量");
   await userEvent.clear(requestsField);
@@ -235,12 +246,12 @@ test("ladders are sets: out-of-order and repeated input is normalised", async ()
   vi.stubGlobal("fetch", fetcher);
   render(<DeploymentPage />);
 
-  await userEvent.click(await screen.findByRole("button", { name: /添加测试/ }));
+  await userEvent.click(await screen.findByRole("button", { name: "添加并发测试" }));
   await userEvent.type(screen.getByLabelText("档位"), "16, 1, 1");
   await userEvent.click(screen.getByRole("button", { name: "创建 Cell" }));
 
-  expect(await screen.findByRole("button", { name: /^1\s*待运行/ })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /^16\s*待运行/ })).toBeInTheDocument();
+  expect(await screen.findByRole("button", cellRow(1, "待运行"))).toBeInTheDocument();
+  expect(screen.getByRole("button", cellRow(16, "待运行"))).toBeInTheDocument();
   const posted = fetcher.mock.calls.find(
     (call) => call[1]?.method === "POST" && String(call[0]).endsWith("/cells"),
   );
@@ -257,9 +268,9 @@ test("a level the workload already has is marked and skipped, not a 409", async 
     }),
   );
   render(<DeploymentPage />);
-  await screen.findByRole("button", { name: /^8\s*待运行/ });
+  await screen.findByRole("button", cellRow(8, "待运行"));
 
-  await userEvent.click(screen.getByRole("button", { name: /添加测试/ }));
+  await userEvent.click(screen.getByRole("button", { name: "添加并发测试" }));
   await userEvent.type(screen.getByLabelText("档位"), "8");
 
   expect(await screen.findByText(/已存在：8/)).toBeInTheDocument();
@@ -273,7 +284,7 @@ test("an unusable token is called out and blocks submission", async () => {
   );
   render(<DeploymentPage />);
 
-  await userEvent.click(await screen.findByRole("button", { name: /添加测试/ }));
+  await userEvent.click(await screen.findByRole("button", { name: "添加并发测试" }));
   await userEvent.type(screen.getByLabelText("档位"), "abc");
 
   expect(await screen.findByText("无法识别的档位：abc")).toBeInTheDocument();
@@ -287,16 +298,17 @@ test("concurrency levels must be whole numbers; qps levels may be fractional", a
   );
   render(<DeploymentPage />);
 
-  await userEvent.click(await screen.findByRole("button", { name: /添加测试/ }));
+  await userEvent.click(await screen.findByRole("button", { name: "添加并发测试" }));
   await userEvent.type(screen.getByLabelText("档位"), "1.5");
   expect(await screen.findByText("并发档位必须是整数：1.5")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "创建 Cell" })).toBeDisabled();
 
-  await userEvent.click(screen.getByRole("radio", { name: "QPS" }));
-  await userEvent.clear(screen.getByLabelText("档位"));
+  await userEvent.click(within(screen.getByRole("dialog", { name: "添加并发测试" })).getByRole("button", { name: "关闭" }));
+  await userEvent.click(screen.getByRole("button", { name: "添加 QPS 测试" }));
   await userEvent.type(screen.getByLabelText("档位"), "0.5");
   await userEvent.click(screen.getByRole("button", { name: "创建 Cell" }));
-  expect(await screen.findByText("0.5")).toBeInTheDocument();
+  const qpsPanel = screen.getByRole("region", { name: "QPS 测试" });
+  expect(await within(qpsPanel).findByRole("button", cellRow(0.5, "待运行"))).toBeInTheDocument();
 });
 
 test("the estimate is shown before creating anything", async () => {
@@ -310,7 +322,7 @@ test("the estimate is shown before creating anything", async () => {
       name: "添加",
     }),
   );
-  await userEvent.click(await screen.findByRole("button", { name: /添加测试/ }));
+  await userEvent.click(await screen.findByRole("button", { name: "添加并发测试" }));
   await userEvent.type(screen.getByLabelText("档位"), "8");
   // The fake prices a cell at 30 seconds; the typed ladder has one level.
   expect(
@@ -373,7 +385,10 @@ test("a running cell shows which phase it is in and how far through", async () =
   );
   render(<DeploymentPage />);
 
-  expect(await screen.findByText("测量中 · 12/64")).toBeInTheDocument();
+  const progress = await screen.findByRole("progressbar");
+  expect(progress).toHaveAttribute("aria-valuenow", "19");
+  expect(progress).toHaveAttribute("aria-valuetext", "测量 · 12/64 请求");
+  expect(screen.getByTitle("测量 · 12/64 请求")).toHaveTextContent("19%");
 });
 
 test("Run All queues every cell in the panel, finished or not", async () => {
@@ -384,12 +399,14 @@ test("Run All queues every cell in the panel, finished or not", async () => {
       makeCell({ id: 1, level: 1, status: "idle" }),
       makeCell({ id: 2, level: 4, status: "failed", error: "executor exited with code 1" }),
       makeCell({ id: 3, level: 8 }),
+      makeCell({ id: 4, mode: "qps", level: 2 }),
     ],
   });
   vi.stubGlobal("fetch", fetcher);
   render(<DeploymentPage />);
 
-  await userEvent.click(await screen.findByRole("button", { name: "Run All" }));
+  const panel = await screen.findByRole("region", { name: "并发测试" });
+  await userEvent.click(within(panel).getByRole("button", { name: "Run All" }));
 
   const posted = fetcher.mock.calls.find(
     (call) => call[1]?.method === "POST" && String(call[0]).endsWith("/cells/run"),
@@ -416,7 +433,8 @@ test("Run All leaves in-flight cells alone", async () => {
   vi.stubGlobal("fetch", fetcher);
   render(<DeploymentPage />);
 
-  await userEvent.click(await screen.findByRole("button", { name: "Run All" }));
+  const panel = await screen.findByRole("region", { name: "并发测试" });
+  await userEvent.click(within(panel).getByRole("button", { name: "Run All" }));
 
   const posted = fetcher.mock.calls.find(
     (call) => call[1]?.method === "POST" && String(call[0]).endsWith("/cells/run"),
@@ -437,9 +455,11 @@ test("the ⋯ menu holds edit, duplicate and delete", async () => {
   expect(within(menu).getByRole("menuitem", { name: "复制" })).toBeInTheDocument();
 
   await userEvent.click(within(menu).getByRole("menuitem", { name: "删除" }));
+  const confirmation = await screen.findByRole("dialog", { name: "删除并发 8 测试" });
+  await userEvent.click(within(confirmation).getByRole("button", { name: "确认删除" }));
   expect(await screen.findByRole("status")).toHaveTextContent("已删除该测试项");
   await waitFor(() =>
-    expect(screen.queryByRole("button", { name: /^8\s*待运行/ })).not.toBeInTheDocument(),
+    expect(screen.queryByRole("button", cellRow(8, "待运行"))).not.toBeInTheDocument(),
   );
 });
 
@@ -503,7 +523,7 @@ test("a running cell shows a thin progress bar", async () => {
 
 // --- results ----------------------------------------------------------------
 
-test("a completed cell opens its results — metrics, curves, histograms — in a dialog", async () => {
+test("a completed cell opens metric tables and artifact download in a dialog", async () => {
   vi.stubGlobal(
     "fetch",
     fakeApi({
@@ -515,19 +535,26 @@ test("a completed cell opens its results — metrics, curves, histograms — in 
   render(<DeploymentPage />);
 
   // The card stays a control surface: clicking a completed row opens the dialog.
-  const row = await screen.findByRole("button", { name: /8\s*已完成/ });
+  const row = await screen.findByRole("button", cellRow(8, "已完成"));
   expect(screen.queryByRole("region", { name: "指标曲线" })).not.toBeInTheDocument();
 
   await userEvent.click(row);
   const dialog = await screen.findByRole("dialog", { name: "并发 8 · 压测结果" });
-  expect(within(dialog).getByText("64/64")).toBeInTheDocument();
-  expect(within(dialog).getByText("788.7 ms")).toBeInTheDocument();
-  expect(within(dialog).getByText("TTFT 分布（ms）")).toBeInTheDocument();
-
-  const charts = within(dialog).getByRole("region", { name: "指标曲线" });
-  for (const metric of ["TTFT p99", "TPOT p99", "E2E p99", "输出吞吐", "成功率"]) {
-    expect(within(charts).getByText(new RegExp(metric))).toBeInTheDocument();
+  expect(within(dialog).getByText(/64 \/ 64/)).toBeInTheDocument();
+  expect(within(dialog).getByText("100%")).toBeInTheDocument();
+  const tables = within(dialog).getAllByRole("table");
+  const ttft = within(tables[0]).getByRole("row", { name: /TTFT/ });
+  expect(within(ttft).getByRole("cell", { name: "788.7 ms" })).toBeInTheDocument();
+  expect(within(ttft).getByRole("cell", { name: "805.9 ms" })).toBeInTheDocument();
+  for (const metric of ["TTFT", "TPOT", "E2E"]) {
+    expect(within(tables[0]).getByRole("row", { name: new RegExp(metric) })).toBeInTheDocument();
   }
+  for (const percentile of ["mean", "p50", "p70", "p95", "p99"]) {
+    expect(within(tables[0]).getByRole("columnheader", { name: percentile })).toBeInTheDocument();
+  }
+  expect(within(tables[1]).getByRole("row", { name: /Input tokens/ })).toBeInTheDocument();
+  expect(within(tables[1]).getByRole("row", { name: /Output tokens/ })).toBeInTheDocument();
+  expect(within(dialog).getByText("输出吞吐")).toBeInTheDocument();
 
   const download = within(dialog).getByRole("link", { name: /下载全部产物/ });
   expect(download).toHaveAttribute("href", "/api/cells/1/artifacts.zip");
@@ -539,13 +566,13 @@ test("the timing caveat is stated where the numbers are", async () => {
     fakeApi({ ...SEED, workloads: WORKLOADS, cells: [makeCell({ id: 1, level: 8 })] }),
   );
   render(<DeploymentPage />);
-  await userEvent.click(await screen.findByRole("button", { name: /8\s*已完成/ }));
+  await userEvent.click(await screen.findByRole("button", cellRow(8, "已完成")));
   const dialog = await screen.findByRole("dialog");
   expect(within(dialog).getByText(/服务时间/)).toBeInTheDocument();
   expect(within(dialog).getByText(/排队等待并发许可的时间不计入/)).toBeInTheDocument();
 });
 
-test("a qps group labels its axis as offered rate", async () => {
+test("a QPS report distinguishes offered rate from achieved throughput", async () => {
   vi.stubGlobal(
     "fetch",
     fakeApi({
@@ -555,11 +582,15 @@ test("a qps group labels its axis as offered rate", async () => {
     }),
   );
   render(<DeploymentPage />);
-  await userEvent.click(await screen.findByRole("button", { name: /4\s*已完成/ }));
-  const charts = within(await screen.findByRole("dialog")).getByRole("region", {
-    name: "指标曲线",
-  });
-  expect(within(charts).getAllByText("提供的 QPS").length).toBeGreaterThan(0);
+  await userEvent.click(await screen.findByRole("button", { name: "查看报告" }));
+  const dialog = await screen.findByRole("dialog", { name: "synthetic-1024-128 · 压测报告" });
+  await userEvent.click(within(dialog).getByRole("tab", { name: "QPS 测试" }));
+  const panel = within(dialog).getByRole("tabpanel", { name: "QPS 测试" });
+  expect(within(panel).getByText("档位为发送端提供的 QPS")).toBeInTheDocument();
+  const overview = within(panel).getAllByRole("table")[0];
+  expect(within(overview).getByRole("columnheader", { name: "QPS" })).toBeInTheDocument();
+  expect(within(overview).getByRole("columnheader", { name: /请求吞吐/ })).toBeInTheDocument();
+  expect(within(overview).getByRole("cell", { name: "4" })).toBeInTheDocument();
 });
 
 // --- staleness ---------------------------------------------------------------
@@ -583,5 +614,5 @@ test("editing num_requests marks the old result as from an older configuration",
   await userEvent.type(editor, "128");
   await userEvent.click(screen.getByRole("button", { name: "保存" }));
 
-  expect(await screen.findByText(/结果来自旧配置/)).toBeInTheDocument();
+  expect(await screen.findByTitle("结果来自旧配置")).toHaveTextContent("旧");
 });

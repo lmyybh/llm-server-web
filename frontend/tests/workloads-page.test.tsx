@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 
@@ -125,6 +125,8 @@ test("a workload referenced by cells cannot be deleted", async () => {
   await screen.findByText("synthetic-1024-128");
 
   await userEvent.click(screen.getByRole("button", { name: "删除" }));
+  const confirmation = await screen.findByRole("dialog", { name: "删除 synthetic-1024-128" });
+  await userEvent.click(within(confirmation).getByRole("button", { name: "确认删除" }));
 
   expect(await screen.findByRole("alert")).toHaveTextContent(
     "referenced by 1 cell(s); delete those cells first",
