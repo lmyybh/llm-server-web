@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import Page from "../app/inspection-projects/page";
@@ -44,9 +44,14 @@ test("creates a new tag on save and makes it available for filtering", async () 
   const save = vi.spyOn(api, "updateInspectionProject").mockImplementation(async (_, changes) => ({ ...item, ...changes }));
   render(<Page />);
   await userEvent.click(await screen.findByRole("button", { name: item.title }));
-  await userEvent.click(screen.getByRole("combobox", { name: "分组标签" }));
-  await userEvent.click(screen.getByRole("option", { name: "＋ 输入新标签" }));
-  await userEvent.type(screen.getByLabelText("新标签名称"), "专项检查");
+  const tagInput = screen.getByRole("combobox", { name: "分组标签" });
+  await userEvent.clear(tagInput);
+  await userEvent.type(tagInput, "专项检查");
+  expect(screen.getByRole("option", { name: "创建“专项检查”（回车）" })).toBeInTheDocument();
+  await userEvent.keyboard("{Enter}");
+  expect(tagInput).toHaveValue("专项检查");
+  expect(tagInput).toHaveAttribute("aria-expanded", "false");
+  expect(save).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: "保存更改" }));
   expect(save).toHaveBeenCalledWith(item.case_id, expect.objectContaining({ group: "专项检查" }));
   await userEvent.click(screen.getByRole("button", { name: "关闭详情" }));
@@ -65,4 +70,43 @@ test("restoring defaults requires confirmation", async () => {
   await userEvent.click(screen.getByRole("button", { name: "确认恢复" }));
   expect(reset).toHaveBeenCalledOnce();
   expect(await screen.findByRole("status")).toHaveTextContent("已恢复初始设置");
+});
+
+test("different custom tags have distinct colors that survive filtering and opening details", async () => {
+  const projects = ["自定义A", "自定义F"].map((group, index) => ({ ...item, group, case_id: `case.${index}`, title: `项目${index}` }));
+  vi.spyOn(api, "listInspectionProjects").mockResolvedValue(projects);
+  render(<Page />);
+  await screen.findByRole("button", { name: "项目0" });
+  const badge = (group: string) => screen.getByText(group, { selector: ".inspection-group" });
+  const color = (element: HTMLElement) => element.getAttribute("style") || element.className;
+  const first = color(badge("自定义A"));
+  const second = color(badge("自定义F"));
+  expect(first).not.toBe(second);
+  await userEvent.type(screen.getByRole("searchbox"), "项目1");
+  expect(color(badge("自定义F"))).toBe(second);
+  await userEvent.click(screen.getByRole("button", { name: "项目1" }));
+  expect(color(within(screen.getByRole("dialog")).getByText("自定义F", { selector: ".inspection-group" }))).toBe(second);
+});
+
+
+test("dragging saves the full order and a failed keyboard reorder restores it", async () => {
+  const second = { ...item, case_id: "second", title: "第二项" };
+  vi.spyOn(api, "listInspectionProjects").mockResolvedValue([item, second]);
+  const save = vi.spyOn(api, "reorderInspectionProjects").mockResolvedValue([second, item]);
+  render(<Page />);
+  const handle = await screen.findByRole("button", { name: `调整${item.title}顺序` });
+  const dataTransfer = { setData: vi.fn(), effectAllowed: "", dropEffect: "" };
+  fireEvent.dragStart(handle, { dataTransfer });
+  fireEvent.dragOver(screen.getByRole("button", { name: "第二项" }).closest("tr")!, { dataTransfer });
+  fireEvent.drop(screen.getByRole("button", { name: "第二项" }).closest("tr")!, { dataTransfer });
+  expect(await screen.findByRole("status")).toHaveTextContent("排序已保存");
+  expect(save).toHaveBeenCalledWith(["second", item.case_id]);
+  const titles = () => screen.getAllByRole("button", { name: /顺序$/ }).map(button => button.getAttribute("aria-label"));
+  expect(titles()[0]).toBe("调整第二项顺序");
+  save.mockRejectedValueOnce(new Error("排序保存失败"));
+  fireEvent.keyDown(screen.getByRole("button", { name: "调整第二项顺序" }), { key: "ArrowDown" });
+  expect(await screen.findByRole("alert")).toHaveTextContent("排序保存失败");
+  expect(titles()[0]).toBe("调整第二项顺序");
+  await userEvent.type(screen.getByRole("searchbox"), "第二项");
+  expect(screen.getByRole("button", { name: "调整第二项顺序" })).toBeDisabled();
 });

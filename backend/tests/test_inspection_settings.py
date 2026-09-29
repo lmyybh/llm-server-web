@@ -153,3 +153,17 @@ def test_runner_receives_snapshot_not_current_settings(tmp_path, monkeypatch):
     monkeypatch.setattr(inspection_runner, "run_inspection", inspect)
     asyncio.run(inspection_runner.execute(run["id"], path))
     assert captured["case_timeouts"]["health.generate"] == 75
+
+
+def test_order_persists_and_reset_restores_catalogue_order(client):
+    original = client.get("/api/inspection-cases").json()
+    ids = [case["case_id"] for case in original][::-1]
+    response = client.put("/api/inspection-cases/order", json={"case_ids": ids})
+    assert response.status_code == 200
+    assert [case["case_id"] for case in response.json()] == ids
+    client.patch(f"/api/inspection-cases/{ids[0]}", json={"title": "改名"})
+    assert [case["case_id"] for case in client.get("/api/inspection-cases").json()] == ids
+    for invalid in [ids[:-1], [ids[0]] * len(ids), ["unknown", *ids[1:]]]:
+        assert client.put("/api/inspection-cases/order", json={"case_ids": invalid}).status_code == 422
+        assert [case["case_id"] for case in client.get("/api/inspection-cases").json()] == ids
+    assert client.post("/api/inspection-cases/reset").json() == original

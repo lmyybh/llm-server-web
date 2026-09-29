@@ -1,20 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { api, type InspectionProject, type InspectionProjectSettings } from "../lib/api";
 import { Button, ErrorBanner, SelectInput } from "../components/ui";
+import { createTagColors } from "../lib/tag-colors";
+import { GroupInput } from "./group-input";
 import "./projects.css";
 
-const palettes: Record<string, string> = {
-  基础接口: "basic", 异常输入: "invalid", 边界行为: "boundary",
-  可选能力: "optional", 扰动恢复: "disruption",
-};
+const defaultGroups = ["基础接口", "异常输入", "边界行为", "可选能力", "扰动恢复"];
 
-function GroupBadge({ group }: { group: string }) {
-  const hash = Array.from(group).reduce((value, char) => (value * 31 + char.charCodeAt(0)) >>> 0, 0);
-  const palette = palettes[group] ?? Object.values(palettes)[hash % Object.values(palettes).length];
-  return <span className={`inspection-group inspection-group-${palette}`}><i aria-hidden />{group}</span>;
+function GroupBadge({ group, colors }: { group: string; colors: Map<string, CSSProperties> }) {
+  return <span className="inspection-group" style={colors.get(group)}><i aria-hidden />{group}</span>;
 }
 
 function DefaultSwitch({ item, disabled, onChange }: { item: InspectionProject; disabled: boolean; onChange: () => void }) {
@@ -33,6 +30,9 @@ export default function InspectionProjectsPage() {
   const [group, setGroup] = useState("");
   const [scope, setScope] = useState("");
   const [selected, setSelected] = useState<InspectionProject | null>(null);
+  const dragging = useRef<string | null>(null);
+  const savingOrder = useRef(false);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [resetOpen, setResetOpen] = useState(false);
 
   async function load() {
@@ -62,8 +62,28 @@ export default function InspectionProjectsPage() {
     catch (e) { setError(e instanceof Error ? e.message : "恢复失败"); }
     finally { setBusy(false); }
   }
+  const canReorder = !busy && !loading && !query.trim() && !group && !scope;
+  async function reorder(sourceId: string, targetId: string) {
+    if (!canReorder || savingOrder.current || sourceId === targetId) return;
+    const from = items.findIndex(item => item.case_id === sourceId);
+    const to = items.findIndex(item => item.case_id === targetId);
+    if (from < 0 || to < 0) return;
+    const previous = items;
+    const reordered = [...items];
+    reordered.splice(to, 0, reordered.splice(from, 1)[0]);
+    savingOrder.current = true;
+    setItems(reordered); setBusy(true); setError(null); setNotice("");
+    try {
+      setItems(await api.reorderInspectionProjects(reordered.map(item => item.case_id)));
+      setNotice("排序已保存");
+    } catch (e) {
+      setItems(previous);
+      setError(e instanceof Error ? e.message : "排序保存失败");
+    } finally { savingOrder.current = false; setBusy(false); }
+  }
+  const colors = useMemo(() => createTagColors([...defaultGroups, ...items.map(item => item.group)]), [items]);
   const q = query.trim().toLowerCase();
-  const groups = Array.from(new Set([...Object.keys(palettes), ...items.map(c => c.group)]));
+  const groups = Array.from(new Set([...defaultGroups, ...items.map(c => c.group)]));
   const filtered = items.filter(c =>
     (!q || [c.title, c.case_id, c.description].some(text => text.toLowerCase().includes(q))) &&
     (!group || c.group === group) && (!scope || c.default_enabled === (scope === "on")));
@@ -89,56 +109,67 @@ export default function InspectionProjectsPage() {
         options={[{ value: "all", label: "全部项目" }, { value: "on", label: "默认选中" }, { value: "off", label: "按需选择" }]} />
       <span className="project-count">{loading ? "加载中…" : `显示 ${filtered.length} / ${items.length} 项`}</span>
     </div>
+    <p className="project-hint">{query.trim() || group || scope ? "清空搜索和筛选后可拖拽排序。" : "拖动左侧手柄排序，自动保存；聚焦手柄后也可使用上下方向键。"}</p>
     <div className="project-table" tabIndex={0} aria-label="巡检项目列表" aria-busy={loading}>
-      <table><thead><tr><th>巡检项目</th><th>分组</th><th>超时</th><th>新服务默认选中</th><th><span className="sr-only">操作</span></th></tr></thead>
-        <tbody>{filtered.map(item => <tr key={item.case_id}>
+      <table><thead><tr><th className="project-sort-column"><span className="sr-only">排序</span></th><th>巡检项目</th><th>分组</th><th>超时</th><th>新服务默认选中</th><th><span className="sr-only">操作</span></th></tr></thead>
+        <tbody>{filtered.map(item => <tr key={item.case_id} data-drop-target={dropTarget === item.case_id}
+          onDragOver={event => { if (canReorder && dragging.current) { event.preventDefault(); event.dataTransfer.dropEffect = "move"; setDropTarget(item.case_id); } }}
+          onDrop={event => { event.preventDefault(); const source = dragging.current; dragging.current = null; setDropTarget(null); if (source) void reorder(source, item.case_id); }}>
+          <td className="project-sort-column"><button type="button" className="project-drag-handle" aria-label={`调整${item.title}顺序`} disabled={!canReorder}
+            draggable={canReorder} onDragStart={event => { dragging.current = item.case_id; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", item.case_id); }}
+            onDragEnd={() => { dragging.current = null; setDropTarget(null); }}
+            onKeyDown={event => {
+              if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+              event.preventDefault();
+              const target = items[items.indexOf(item) + (event.key === "ArrowUp" ? -1 : 1)];
+              if (target) void reorder(item.case_id, target.case_id);
+            }}>⠿</button></td>
           <td><button className="project-name" onClick={() => { setError(null); setSelected(item); }}>{item.title}</button>
             <span className="project-id">{item.case_id}</span><p className="project-description">{item.description}</p></td>
-          <td><GroupBadge group={item.group} /></td><td className="whitespace-nowrap">{item.timeout_seconds} 秒</td>
+          <td><GroupBadge group={item.group} colors={colors} /></td><td className="whitespace-nowrap">{item.timeout_seconds} 秒</td>
           <td><DefaultSwitch item={item} disabled={busy} onChange={() => void update(item, { default_enabled: !item.default_enabled })} /></td>
           <td><button className="project-details" aria-label={`查看${item.title}详情`} onClick={() => { setError(null); setSelected(item); }}>查看详情 ↗</button></td>
         </tr>)}
-        {!filtered.length && <tr><td colSpan={5} className="project-empty">{loading ? "正在加载巡检项目…" : error ? <button onClick={() => void load()}>加载失败，点击重试</button> : "没有匹配的巡检项目，请调整搜索或筛选条件。"}</td></tr>}
+        {!filtered.length && <tr><td colSpan={6} className="project-empty">{loading ? "正在加载巡检项目…" : error ? <button onClick={() => void load()}>加载失败，点击重试</button> : "没有匹配的巡检项目，请调整搜索或筛选条件。"}</td></tr>}
         </tbody></table>
     </div>
     <div className="project-foot"><span>请求与判断规则为内置定义。</span><span role="status">{notice}</span></div>
     <Dialog.Root open={!!selected} onOpenChange={open => { if (!open && !busy) { setSelected(null); setError(null); } }}>
       <Dialog.Portal><Dialog.Overlay className="project-overlay" /><Dialog.Content className="project-drawer" aria-describedby={undefined}>
         <div className="project-drawer-bar"><Dialog.Title>巡检项目 / 详情与设置</Dialog.Title><Dialog.Close disabled={busy} aria-label="关闭详情">×</Dialog.Close></div>
-        {selected && <ProjectEditor key={selected.case_id} item={selected} groups={groups} busy={busy} error={error}
+        {selected && <ProjectEditor key={selected.case_id} item={selected} groups={groups} colors={colors} busy={busy} error={error}
           onSave={async changes => { const saved = await update(selected, changes); if (saved) setSelected(saved); return !!saved; }} />}
       </Dialog.Content></Dialog.Portal>
     </Dialog.Root>
     <Dialog.Root open={resetOpen} onOpenChange={open => { if (!busy) { setResetOpen(open); setError(null); } }}>
       <Dialog.Portal><Dialog.Overlay className="project-overlay" /><Dialog.Content className="project-reset">
         <Dialog.Title className="text-lg font-semibold">恢复初始设置</Dialog.Title>
-        <Dialog.Description className="my-4 text-sm text-slate-500">将所有项目的名称、分组标签、超时和默认选择恢复为内置值。已保存的服务选择和正在执行的任务不受影响。</Dialog.Description>
+        <Dialog.Description className="my-4 text-sm text-slate-500">将所有项目的名称、分组标签、超时、默认选择和排序恢复为内置值。已保存的服务选择和正在执行的任务不受影响。</Dialog.Description>
         <ErrorBanner message={error} /><div className="mt-5 flex justify-end gap-2"><Dialog.Close asChild><Button variant="ghost" disabled={busy}>取消</Button></Dialog.Close><Button disabled={busy} onClick={() => void reset()}>{busy ? "恢复中…" : "确认恢复"}</Button></div>
       </Dialog.Content></Dialog.Portal>
     </Dialog.Root>
   </section>;
 }
 
-function ProjectEditor({ item, groups, busy, error, onSave }: {
-  item: InspectionProject; groups: string[]; busy: boolean; error: string | null;
+function ProjectEditor({ item, groups, colors, busy, error, onSave }: {
+  item: InspectionProject; groups: string[]; colors: Map<string, CSSProperties>; busy: boolean; error: string | null;
   onSave: (changes: InspectionProjectSettings) => Promise<boolean>;
 }) {
   const [title, setTitle] = useState(item.title);
   const [timeout, setTimeout] = useState(String(item.timeout_seconds));
   const [enabled, setEnabled] = useState(item.default_enabled);
   const [tag, setTag] = useState(item.group);
-  const [creatingTag, setCreatingTag] = useState(false);
   const dirty = title !== item.title || tag.trim() !== item.group || Number(timeout) !== item.timeout_seconds || enabled !== item.default_enabled;
-  function discard() { setTitle(item.title); setTag(item.group); setCreatingTag(false); setTimeout(String(item.timeout_seconds)); setEnabled(item.default_enabled); }
+  function discard() { setTitle(item.title); setTag(item.group); setTimeout(String(item.timeout_seconds)); setEnabled(item.default_enabled); }
   return <form className="project-editor" onSubmit={async e => {
     e.preventDefault();
     const name = title.trim();
     if (!name || !tag.trim()) return;
     if (await onSave({ title: name, group: tag.trim(), timeout_seconds: Number(timeout), default_enabled: enabled })) {
-      setTitle(name); setTag(tag.trim()); setCreatingTag(false);
+      setTitle(name); setTag(tag.trim());
     }
   }}>
-    <div className="flex items-start justify-between gap-3"><h2 className="text-xl font-semibold">{item.title}</h2><GroupBadge group={item.group} /></div>
+    <div className="flex items-start justify-between gap-3"><h2 className="text-xl font-semibold">{item.title}</h2><GroupBadge group={item.group} colors={colors} /></div>
     <span className="project-id">{item.case_id}</span><p className="mt-3 text-xs text-slate-500">{item.description}</p>
     <section><h3>怎么执行</h3><ol className="project-steps">{item.steps.map((step, i) => <li key={step}><span>{i + 1}</span>{step}</li>)}</ol></section>
     <section><h3>怎么判断</h3><dl className="project-rules">
@@ -148,14 +179,7 @@ function ProjectEditor({ item, groups, busy, error, onSave }: {
     </dl></section>
     <section><h3>执行设置</h3><fieldset disabled={busy} className="space-y-4">
       <div className="project-field"><span>分组标签</span>
-        <SelectInput ariaLabel="分组标签" disabled={busy}
-          value={creatingTag ? "create" : `group:${tag}`}
-          onValueChange={value => { setCreatingTag(value === "create"); setTag(value === "create" ? "" : value.slice(6)); }}
-          options={[...groups.map(g => ({ value: `group:${g}`, label: g })), { value: "create", label: "＋ 输入新标签" }]} />
-        {creatingTag && <label className="project-field">新标签名称
-          <input className="project-control" aria-label="新标签名称" required maxLength={30} value={tag} onChange={e => setTag(e.target.value)} placeholder="输入标签名称" />
-          <small>{tag.trim() && groups.includes(tag.trim()) ? "标签已存在，保存时使用已有标签。" : "保存时自动创建标签，并加入筛选列表。"}</small>
-        </label>}
+        <GroupInput value={tag} groups={groups} disabled={busy} onChange={setTag} />
       </div>
       <label className="project-field">项目名称<input className="project-control" required maxLength={60} pattern=".*\S.*" value={title} onChange={e => setTitle(e.target.value)} /></label>
       <div className="grid grid-cols-2 gap-5"><label className="project-field">执行超时（秒）<input className="project-control w-28" required type="number" min={1} max={900} step={1} value={timeout} onChange={e => setTimeout(e.target.value)} /><small>用于后续巡检。{item.case_id === "disruption.abort_storm" && "恢复检查另有 30 秒预算。"}{item.case_id === "stability.high_concurrency" && "包含数据准备、5 分钟加压和收尾，建议保留 900 秒；取消或超时后仍最多用 60 秒检查恢复。"}</small></label>

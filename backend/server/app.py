@@ -438,6 +438,12 @@ def list_inspection_cases(connection: sqlite3.Connection = Connection) -> list[d
     return store.list_inspection_cases(connection)
 
 
+@router.put("/inspection-cases/order")
+def reorder_inspection_cases(payload: InspectionCaseSelection,
+                             connection: sqlite3.Connection = Connection) -> list[dict]:
+    return _guard(store.reorder_inspection_cases, connection, payload.case_ids)
+
+
 @router.patch("/inspection-cases/{case_id}")
 def update_inspection_case(case_id: str, payload: InspectionCaseUpdate,
                            connection: sqlite3.Connection = Connection) -> dict:

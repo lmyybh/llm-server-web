@@ -583,6 +583,9 @@ export const api = {
   listInspectionProjects: () => request<InspectionProject[]>("/api/inspection-cases"),
   updateInspectionProject: (id: string, changes: Partial<InspectionProjectSettings>) =>
     request<InspectionProject>(`/api/inspection-cases/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(changes) }),
+  reorderInspectionProjects: (caseIds: string[]) => request<InspectionProject[]>("/api/inspection-cases/order", {
+    method: "PUT", body: JSON.stringify({ case_ids: caseIds }),
+  }),
   resetInspectionProjects: () => request<InspectionProject[]>("/api/inspection-cases/reset", { method: "POST" }),
   configureInspectionCases: (serviceId: number, caseIds: string[]) =>
     request<Service>(`/api/services/${serviceId}/inspection-cases`, {

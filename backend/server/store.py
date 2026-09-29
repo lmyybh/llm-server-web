@@ -15,9 +15,13 @@ from pathlib import Path
 
 from llmbench.inspection import catalogue, case_catalogue
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS inspection_case_order (
+    case_id TEXT PRIMARY KEY,
+    position INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS inspection_case_setting (
     case_id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -1480,7 +1484,10 @@ def list_inspection_cases(connection: sqlite3.Connection) -> list[dict]:
         case["group"] = case.pop("group_name", None) or case["group"]
         case["default_enabled"] = bool(case["default_enabled"])
         result.append(case)
-    return result
+    positions = {row["case_id"]: row["position"] for row in connection.execute(
+        "SELECT case_id, position FROM inspection_case_order"
+    )}
+    return sorted(result, key=lambda case: positions.get(case["case_id"], len(positions)))
 
 
 def update_inspection_case(connection: sqlite3.Connection, case_id: str, changes: dict) -> dict:
@@ -1499,8 +1506,22 @@ def update_inspection_case(connection: sqlite3.Connection, case_id: str, changes
     return case
 
 
+def reorder_inspection_cases(connection: sqlite3.Connection, case_ids: list[str]) -> list[dict]:
+    if len(case_ids) != len(set(case_ids)) or set(case_ids) != set(_inspection_case_ids()):
+        raise Invalid("排序必须包含全部巡检项目，且不能重复")
+    with connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("DELETE FROM inspection_case_order")
+        connection.executemany(
+            "INSERT INTO inspection_case_order (case_id, position) VALUES (?, ?)",
+            [(case_id, position) for position, case_id in enumerate(case_ids)],
+        )
+    return list_inspection_cases(connection)
+
+
 def reset_inspection_cases(connection: sqlite3.Connection) -> list[dict]:
     connection.execute("DELETE FROM inspection_case_setting")
+    connection.execute("DELETE FROM inspection_case_order")
     return list_inspection_cases(connection)
 
 
