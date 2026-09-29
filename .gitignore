@@ -13,6 +13,7 @@ __pycache__/
 # Node / Next.js
 node_modules/
 .next/
+.next-dev/
 out/
 tsconfig.tsbuildinfo
 

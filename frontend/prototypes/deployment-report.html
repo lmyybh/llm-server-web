@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2P1D-tp8 · 部署压测报告</title>
+<style>
+:root{color-scheme:light;--background:#f4f7fb;--foreground:#172033;--muted:#68758b;--line:#e3e9f1;--accent:#2563eb;--accent-soft:#eff6ff;--surface:#fff;--head:#f8fafc;--grid:#e8edf4;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"PingFang SC",sans-serif}
+*{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:145px}body{margin:0;color:var(--foreground);background:radial-gradient(ellipse at 72% -15%,#bfdbfe57,transparent 38rem),var(--background);font-size:12px;-webkit-font-smoothing:antialiased}button,input{font:inherit}button,a{touch-action:manipulation}button{cursor:pointer}button:focus-visible,a:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid #3b82f657;outline-offset:3px}button{border:1px solid var(--line);border-radius:7px;background:var(--surface);color:var(--muted);padding:8px 12px}button:hover{color:var(--accent);border-color:#93b4eb}a{color:inherit;text-decoration:none}main{max-width:1360px;margin:auto;padding:28px 30px 45px}.breadcrumb{display:flex;gap:10px;color:#94a3b8;font-size:11px;margin-bottom:22px}.breadcrumb strong{font-weight:500;color:var(--muted)}.heading{display:flex;justify-content:space-between;align-items:center;gap:18px}.eyebrow{font-size:10px;font-weight:700;letter-spacing:.17em;color:#94a3b8}h1{font-size:27px;letter-spacing:-.035em;margin:5px 0 7px;font-weight:650}p{color:var(--muted);line-height:1.7;margin:0}.heading p{font-size:11px}.actions{display:flex;gap:7px}.primary{background:#2563eb;color:white;border-color:#2563eb}.primary:hover{background:#1d4ed8;color:white}.sample{display:inline-block;font-size:10px;color:#64748b;background:#eef2f7;border:1px solid var(--line);border-radius:5px;padding:3px 7px;margin-left:8px;vertical-align:middle}.deployment-meta{display:flex;flex-wrap:wrap;gap:10px 25px;margin-top:19px;padding:15px 0 21px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted)}.deployment-meta b{color:var(--foreground);font-weight:500;margin-left:7px}
+.toolbar{position:sticky;top:0;z-index:5;padding:15px 0 12px;background:var(--background);border-bottom:1px solid var(--line);margin-bottom:22px}.toolbar-top{display:flex;justify-content:space-between;align-items:center;gap:15px}.tabs{display:inline-flex;padding:4px;background:#eaf0f7;border:1px solid var(--line);border-radius:11px;gap:3px}.tabs button{background:none;border:0;border-radius:7px;font-weight:600;padding:9px 17px;color:#718096}.tabs [aria-selected="true"]{background:var(--surface);color:var(--accent);box-shadow:0 1px 5px #233d6014}.mode-description{font-size:10px;color:#94a3b8;text-align:right}.workload-nav{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.workload-nav a{padding:5px 9px;border:1px solid var(--line);border-radius:6px;font-size:10px;background:var(--surface);color:var(--muted)}.workload-nav a:hover{color:var(--accent);border-color:#93b4eb}.workload-nav span{color:#94a3b8;margin-right:3px}.workload{margin:0 0 24px;border:1px solid var(--line);border-radius:17px;background:var(--surface);overflow:hidden;box-shadow:0 3px 14px #18365805}.workload-head{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:21px 23px;border-bottom:1px solid var(--line);background:linear-gradient(90deg,var(--accent-soft),var(--surface) 65%)}.workload-title{display:flex;align-items:center;gap:12px}.number{display:grid;place-items:center;flex-shrink:0;width:33px;height:33px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--accent);font-weight:650;font-size:11px}h2{font-size:18px;letter-spacing:-.025em;margin:0 0 5px}.workload-head p{font-size:10px}.pills{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}.pill{border:1px solid var(--line);border-radius:5px;background:var(--surface);font-size:10px;color:var(--muted);padding:5px 8px}.pill b{font-weight:600;color:var(--accent)}.body{padding:20px 23px 23px}.section-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:0 0 10px}h3{font-size:12px;margin:0;font-weight:650}.section-head p{font-size:10px;color:#94a3b8}.overview{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-bottom:22px}.scroll{overflow:auto}table{border-collapse:collapse;width:100%;text-align:right;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap}th{font-size:10px;font-weight:500;background:var(--head);color:#8492a6;padding:9px 12px}td{padding:9px 12px;border-top:1px solid var(--line);color:var(--muted)}td:first-child,th:first-child{text-align:left}td:first-child{color:var(--accent);font-weight:600}tbody tr:hover{background:var(--accent-soft)}.overview table{min-width:700px}.overview td,.overview th{padding:11px 15px}.status{font-size:10px;border-radius:4px;padding:3px 6px;color:#15803d;background:#f0fdf4}.status.pending{background:#f1f5f9;color:#94a3b8}.warn{color:#b7791f}.stale{font-size:9px;color:#b7791f;margin-left:6px}.metric-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.metric{min-width:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}.metric-head{display:flex;justify-content:space-between;align-items:center;padding:14px 16px 4px}.metric-head h4{font-size:12px;margin:0;font-weight:650}.unit{font-size:10px;color:#94a3b8}.chart{padding:0 10px}.chart svg{width:100%;height:auto;display:block}.chart text{font-family:inherit;fill:#94a3b8}.chart .grid{stroke:var(--grid)}.chart circle{cursor:crosshair}.chart circle:focus{outline:none;stroke:var(--foreground);stroke-width:3}.legend{display:flex;align-items:center;justify-content:center;gap:15px;min-height:34px;padding:0 12px 7px}.legend button{display:flex;align-items:center;gap:5px;border:0;padding:4px 0;background:none;font-size:10px;color:var(--muted)}.legend button[aria-pressed="false"]{opacity:.35;text-decoration:line-through}.dot{width:6px;height:6px;border-radius:50%;display:inline-block}.metric table{min-width:390px}.metric.scalar table{min-width:250px}.metric th:first-child,.metric td:first-child{padding-left:16px}.metric tr.point-selected{background:var(--accent-soft);box-shadow:inset 3px 0 var(--accent)}.metric-foot{font-size:9px;color:#94a3b8;padding:8px 16px;border-top:1px solid var(--line)}.group-title{padding-top:22px;margin-top:22px;border-top:1px solid var(--line)}.help{font-size:10px;color:#94a3b8;margin:13px 0 0}.notes{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:15px 18px;margin-top:6px}.notes summary{cursor:pointer;font-size:11px;font-weight:600}.notes p{font-size:10px;margin-top:9px;max-width:1050px}footer{display:flex;justify-content:space-between;color:#94a3b8;font-size:10px;margin-top:18px;gap:12px}.tooltip{position:fixed;z-index:20;pointer-events:none;white-space:pre-line;background:#172438;color:#f8fafc;padding:12px 15px;font-size:11px;line-height:1.8;border-radius:8px;box-shadow:0 5px 25px #17243830;max-width:calc(100vw - 20px)}[hidden]{display:none!important}
+body[data-mode="qps"]{--accent:#047857;--accent-soft:#ecfdf5}
+@media(prefers-color-scheme:dark){:root{color-scheme:dark;--background:#171717;--foreground:#f5f5f5;--muted:#a3a3a3;--line:#404040;--accent:#60a5fa;--accent-soft:#172337;--surface:#1c1c1c;--head:#262626;--grid:#333}body{background:var(--background)}.tabs,.sample{background:#262626}.status{background:#143023;color:#86efac}body[data-mode="qps"]{--accent:#6ee7b7;--accent-soft:#142d25}.status.pending{background:#262626;color:#a3a3a3}}
+@media(max-width:900px){main{padding:23px 20px}.metric-grid{grid-template-columns:1fr}.workload-head{align-items:flex-start;flex-wrap:wrap}.pills{justify-content:flex-start}.mode-description{display:none}.heading{flex-wrap:wrap}.workload-nav{flex-wrap:nowrap;overflow:auto;padding-bottom:3px}.workload-nav a{flex-shrink:0}.body{padding:16px}.section-head{align-items:flex-start}.section-head p{max-width:48%;text-align:right}}
+@media(max-width:480px){main{padding:18px 10px}.workload-head{padding:17px}.workload-title{gap:9px}h1{font-size:23px}h2{font-size:16px}.heading .actions{width:100%}.toolbar{padding-top:10px}html{scroll-padding-top:135px}.legend{gap:11px}.section-head p{font-size:9px}footer{flex-direction:column}}
+@media print{.toolbar{position:static}.actions,.workload-nav,.help{display:none}.tabs button:not([aria-selected="true"]){display:none}main{max-width:none;padding:0}.metric{break-inside:avoid}.workload{overflow:visible;box-shadow:none}.metric-grid{grid-template-columns:1fr 1fr;gap:10px}.scroll{overflow:visible}.metric table{min-width:0}.overview table{min-width:0}td,th{padding:6px;font-size:9px}.body{padding:12px}.chart svg{max-height:175px}}
+
+.view-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:12px}.view-switch{display:flex;gap:4px;background:var(--head);border:1px solid var(--line);padding:3px;border-radius:8px}.view-switch button{border:0;background:none;padding:7px 15px}.view-switch button[aria-pressed="true"]{background:var(--surface);color:var(--accent);box-shadow:0 1px 4px #233d6014}.run-details{border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:16px}.run-details summary{cursor:pointer;color:var(--muted);font-size:11px}.run-details .overview{margin:12px 0 0}.run-details .section-head{display:none}.data-link{font-size:10px;padding:4px 7px;margin-left:8px;border:0;color:var(--accent);background:var(--accent-soft)}.data-section{border:1px solid var(--line);border-radius:10px;overflow:hidden;scroll-margin-top:145px}.data-section+.data-section{margin-top:18px}.data-head{padding:14px 16px;display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}.data-section table{min-width:650px}.data-section th,.data-section td{padding:12px 16px}.data-section .target-column{background:var(--accent-soft);color:var(--accent);font-weight:600}.data-section:focus{outline:2px solid var(--accent);outline-offset:3px}.latency-switch{display:flex;gap:4px}.latency-switch button{font-size:10px;padding:5px 10px}.latency-switch [aria-pressed="true"]{color:var(--accent);background:var(--accent-soft);border-color:var(--accent)}.attention{color:#b7791f}.view-bar p{font-size:10px;color:#94a3b8}
+@media print{.data-link,.view-bar,.latency-switch{display:none}.data-section{break-inside:avoid}}
+
+.report-layout{display:grid;grid-template-columns:210px minmax(0,1fr);gap:22px;align-items:start}main{max-width:1500px}.toolbar{margin-bottom:20px}.report-layout>aside{position:sticky;top:83px;max-height:calc(100vh - 100px);overflow:auto;padding:8px 4px}.extra-charts{margin-top:18px;border-top:1px solid var(--line);padding-top:15px}.extra-charts summary{font-size:11px;color:var(--muted);cursor:pointer}.extra-charts .metric-grid{margin-top:15px}.metric:has(.legend button:only-child) .legend{display:none}.metric-foot{display:none}.chart{padding-bottom:8px}.run-details summary{font-size:10px}
+#workload-nav a{font-size:11px;white-space:nowrap}#workload-nav a[aria-current]{background:#eff6ff;color:#1d4ed8;font-weight:600;box-shadow:0 0 0 1px #dbeafe}#workload-nav a[aria-current]>span:first-child{background:white;color:#2563eb}#workload-nav a>span:first-child{font-size:11px}#workload-nav a:not([aria-current]){background:transparent;box-shadow:none;color:#64748b}
+@media(max-width:900px){.report-layout{grid-template-columns:155px minmax(0,1fr);gap:14px}}
+@media(max-width:720px){.report-layout{grid-template-columns:48px minmax(0,1fr);gap:10px}.body{padding:12px}.report-layout>aside{padding:4px}.pills{gap:4px}.pill{font-size:9px}.workload-head{padding:14px}.number{display:none}h2{font-size:14px}}
+@media print{.report-layout{display:block}#workload-nav{display:none}}
+/* SIDEBAR_CSS_START */
+.mb-2 {
+    margin-bottom: 0.5rem
+}
+.mt-auto {
+    margin-top: auto
+}
+.flex {
+    display: flex
+}
+.grid {
+    display: grid
+}
+.h-8 {
+    height: 2rem
+}
+.h-full {
+    height: 100%
+}
+.w-8 {
+    width: 2rem
+}
+.shrink-0 {
+    flex-shrink: 0
+}
+.flex-col {
+    flex-direction: column
+}
+.place-items-center {
+    place-items: center
+}
+.items-center {
+    align-items: center
+}
+.gap-1\.5 {
+    gap: 0.375rem
+}
+.gap-3 {
+    gap: 0.75rem
+}
+.gap-6 {
+    gap: 1.5rem
+}
+.rounded-lg {
+    border-radius: 0.5rem
+}
+.rounded-xl {
+    border-radius: 0.75rem
+}
+.border-t {
+    border-top-width: 1px
+}
+.border-slate-200\/80 {
+    border-color: rgb(226 232 240 / 0.8)
+}
+.bg-blue-50 {
+    --tw-bg-opacity: 1;
+    background-color: rgb(239 246 255 / var(--tw-bg-opacity, 1))
+}
+.bg-white {
+    --tw-bg-opacity: 1;
+    background-color: rgb(255 255 255 / var(--tw-bg-opacity, 1))
+}
+.px-3 {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem
+}
+.py-2\.5 {
+    padding-top: 0.625rem;
+    padding-bottom: 0.625rem
+}
+.pt-5 {
+    padding-top: 1.25rem
+}
+.text-\[10px\] {
+    font-size: 10px
+}
+.text-base {
+    font-size: 1rem;
+    line-height: 1.5rem
+}
+.text-sm {
+    font-size: 0.875rem;
+    line-height: 1.25rem
+}
+.font-semibold {
+    font-weight: 600
+}
+.uppercase {
+    text-transform: uppercase
+}
+.tracking-\[\.16em\] {
+    letter-spacing: .16em
+}
+.text-blue-600 {
+    --tw-text-opacity: 1;
+    color: rgb(37 99 235 / var(--tw-text-opacity, 1))
+}
+.text-blue-700 {
+    --tw-text-opacity: 1;
+    color: rgb(29 78 216 / var(--tw-text-opacity, 1))
+}
+.text-slate-400 {
+    --tw-text-opacity: 1;
+    color: rgb(148 163 184 / var(--tw-text-opacity, 1))
+}
+.text-slate-500 {
+    --tw-text-opacity: 1;
+    color: rgb(100 116 139 / var(--tw-text-opacity, 1))
+}
+.shadow-sm {
+    --tw-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --tw-shadow-colored: 0 1px 2px 0 var(--tw-shadow-color);
+    box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow)
+}
+.shadow-blue-900\/\[\.03\] {
+    --tw-shadow-color: rgb(30 58 138 / .03);
+    --tw-shadow: var(--tw-shadow-colored)
+}
+.ring-1 {
+    --tw-ring-offset-shadow: var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
+    --tw-ring-shadow: var(--tw-ring-inset) 0 0 0 calc(1px + var(--tw-ring-offset-width)) var(--tw-ring-color);
+    box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000)
+}
+.ring-blue-100 {
+    --tw-ring-opacity: 1;
+    --tw-ring-color: rgb(219 234 254 / var(--tw-ring-opacity, 1))
+}
+.transition-all {
+    transition-property: all;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+    transition-duration: 150ms
+}
+.hover\:bg-slate-100\/80:hover {
+    background-color: rgb(241 245 249 / 0.8)
+}
+.hover\:text-slate-900:hover {
+    --tw-text-opacity: 1;
+    color: rgb(15 23 42 / var(--tw-text-opacity, 1))
+}
+.group:hover .group-hover\:text-slate-700 {
+    --tw-text-opacity: 1;
+    color: rgb(51 65 85 / var(--tw-text-opacity, 1))
+}
+@media (max-width: 720px) {
+    .max-\[720px\]\:hidden {
+        display: none
+    }
+    .max-\[720px\]\:justify-center {
+        justify-content: center
+    }
+    .max-\[720px\]\:px-0 {
+        padding-left: 0px;
+        padding-right: 0px
+    }
+}
+/* SIDEBAR_CSS_END */
+
+/* Mode controls and section navigation share one sticky sidebar. */
+html{scroll-padding-top:24px;overflow-anchor:none}.deployment-meta{margin-bottom:22px}
+.report-layout>aside{top:24px;max-height:calc(100dvh - 48px);overflow:hidden;display:flex;flex-direction:column;padding:4px}
+.sidebar-mode{flex:none;border-bottom:1px solid var(--line);padding:0 5px 15px;margin-bottom:17px}
+.sidebar-mode .tabs{display:flex;width:100%}.sidebar-mode .tabs button{flex:1;padding:9px 8px}
+.sidebar-mode p{font-size:10px;line-height:1.6;color:#94a3b8;margin-top:9px;padding:0 3px}
+.sidebar-list{overflow-y:auto;min-height:0;padding:2px;scrollbar-width:thin}
+.mode-pill{color:var(--accent);background:var(--accent-soft)}
+.data-section{scroll-margin-top:24px}
+@media(max-width:720px){.sidebar-mode{padding:0 0 10px;margin-bottom:10px}.sidebar-mode .tabs{flex-direction:column;padding:2px;gap:3px}.sidebar-mode .tabs button{font-size:10px;padding:7px 2px}.sidebar-mode p{display:none}}
+
+.latency-tables{margin-top:20px;padding-top:20px;border-top:1px solid var(--line)}
+.latency-tables .data-section{margin:0;min-width:0;border-radius:13px}
+.latency-card table{min-width:410px;table-layout:fixed}
+.latency-card td,.latency-card th{padding:10px 7px}
+.latency-card th:first-child,.latency-card td:first-child{width:58px;padding-left:13px}
+.workload-overview{border-radius:13px}
+.workload-overview table{min-width:760px}
+.table-note{padding:8px 12px;border-top:1px solid var(--line);font-size:10px;color:#94a3b8}
+.heading{padding:0 0 22px;margin-bottom:24px;border-bottom:1px solid var(--line)}
+.heading h1{margin:0 0 8px;font-size:25px}.heading p{font-size:12px;color:var(--muted)}
+.subtitle-divider{padding:0 7px;color:#94a3b8}.report-info{font-size:13px;font-weight:400;color:#94a3b8;margin-left:8px;cursor:help;vertical-align:middle;letter-spacing:0}
+#print{background:transparent;border-color:transparent;color:var(--muted)}#print:hover{background:var(--surface);border-color:var(--line)}
+@media(max-width:480px){.heading h1{font-size:21px}.heading{padding-bottom:18px;margin-bottom:18px}}
+</style>
+</head>
+<body data-mode="concurrency">
+<main>
+<div class="heading">
+  <div><h1>2P1D-tp8 · 压测报告 <span class="sample">示例数据</span><span class="report-info" tabindex="0" aria-label="报告范围：各 Cell 最新执行快照" title="报告范围：各 Cell 最新执行快照">ⓘ</span></h1><p>DeepSeek-V4-Flash <span class="subtitle-divider">·</span> SGLang</p></div>
+  <div class="actions"><button id="print" title="打印当前模式">打印</button><button class="primary" id="export" title="导出全部 Workload、全部模式的数据">导出 CSV</button></div>
+</div>
+<div class="report-layout"><aside id="workload-nav" aria-label="Workload 目录"><div class="sidebar-mode"><div class="tabs" role="tablist" aria-label="压测模式"><button id="tab-concurrency" role="tab" aria-selected="true" aria-controls="report" data-mode="concurrency">并发</button><button id="tab-qps" role="tab" aria-selected="false" aria-controls="report" tabindex="-1" data-mode="qps">QPS</button></div></div><div class="sidebar-list"><!-- SIDEBAR_START --><nav class="flex h-full flex-col gap-6"><div class="flex flex-col gap-1.5 "><p class="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[.16em] text-slate-400 max-[720px]:hidden">Workload</p><div><a href="#workload-prefill" title="prefill-1k-128" class="group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all max-[720px]:justify-center max-[720px]:px-0 text-slate-500 hover:bg-slate-100/80 hover:text-slate-900"><span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-base text-slate-400 group-hover:text-slate-700" aria-hidden="true">01</span><span class="max-[720px]:hidden">prefill-1k-128</span></a></div><div><a href="#workload-balanced" title="balanced-2k-1k" class="group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all max-[720px]:justify-center max-[720px]:px-0 text-slate-500 hover:bg-slate-100/80 hover:text-slate-900"><span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-base text-slate-400 group-hover:text-slate-700" aria-hidden="true">02</span><span class="max-[720px]:hidden">balanced-2k-1k</span></a></div><div><a href="#workload-long" title="long-context-8k" class="group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all max-[720px]:justify-center max-[720px]:px-0 text-slate-500 hover:bg-slate-100/80 hover:text-slate-900"><span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-base text-slate-400 group-hover:text-slate-700" aria-hidden="true">03</span><span class="max-[720px]:hidden">long-context-8k</span></a></div><div><a href="#workload-sharegpt" title="sharegpt" class="group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all max-[720px]:justify-center max-[720px]:px-0 text-slate-500 hover:bg-slate-100/80 hover:text-slate-900"><span class="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-base text-slate-400 group-hover:text-slate-700" aria-hidden="true">04</span><span class="max-[720px]:hidden">sharegpt</span></a></div></div></nav><!-- SIDEBAR_END --></div></aside><div id="report" role="tabpanel" aria-labelledby="tab-concurrency"></div></div>
+<footer><span>2P1D-tp8 · 部署压测报告</span><span>图表与表格使用同一份数据 · HTML 离线模板</span></footer>
+</main>
+<div class="tooltip" id="tooltip" role="status" hidden></div>
+<script>
+'use strict';
+// Replace REPORT with server-side Cell snapshots. Percentiles are explicit data fields,
+// not computed in the rendering layer. All fixture values below are illustrative.
+const PERCENTILES=['Mean','P50','P70','P95','P99'];
+const COLORS=['#64748b','#3b82f6','#06b6d4','#8b5cf6','#f59e0b'];
+const WORKLOADS=[
+ {id:'prefill',name:'prefill-1k-128',shape:'合成数据 · 输入 1,000 / 输出上限 128 tokens',input:1000,output:128,delay:140},
+ {id:'balanced',name:'balanced-2k-1k',shape:'合成数据 · 输入 2,048 / 输出上限 1,024 tokens',input:2048,output:1024,delay:230},
+ {id:'long',name:'long-context-8k',shape:'合成数据 · 输入 8,192 / 输出上限 512 tokens',input:8192,output:512,delay:490},
+ {id:'sharegpt',name:'sharegpt',shape:'真实数据集 · ShareGPT',input:1350,output:380,delay:180}
+];
+const LEVELS={concurrency:[1,4,8,16,32,64],qps:[1,2,4,8,16,32]};
+const METRICS=[
+ {key:'rps',title:'请求吞吐',unit:'req/s',digits:2,group:'efficiency',note:'成功请求数 / 正式压测总耗时'},
+ {key:'actual',title:'实际并发',unit:'请求数',digits:1,group:'efficiency',note:'时间平均在途请求数'},
+ {key:'inputThroughput',title:'输入吞吐',unit:'tok/s',digits:1,group:'efficiency',note:'成功请求输入 Token 总量 / 正式压测总耗时'},
+ {key:'outputThroughput',title:'输出吞吐',unit:'tok/s',digits:1,group:'efficiency',note:'成功请求输出 Token 总量 / 正式压测总耗时'},
+ {key:'successRate',title:'成功率',unit:'%',digits:1,group:'latency',note:'成功请求数 / 总请求数'},
+ {key:'ttft',title:'TTFT · 首 Token 延迟',unit:'ms',digits:1,group:'latency',note:'每个成功请求 · 不含等待并发许可的时间',distribution:true},
+ {key:'tpot',title:'TPOT · 每 Token 延迟',unit:'ms',digits:1,group:'latency',note:'每个成功请求 · 后续输出 Token 的平均间隔',distribution:true},
+ {key:'e2e',title:'E2E · 请求总延迟',unit:'ms',digits:1,group:'latency',note:'每个成功请求 · 不含等待并发许可的时间',distribution:true}
+];
+function sampleDistribution(mean){return {Mean:mean,P50:mean*.89,P70:mean*1.08,P95:mean*1.52,P99:mean*1.91};}
+const REPORT=WORKLOADS.map((w,wi)=>({...w,cells:Object.entries(LEVELS).flatMap(([mode,levels])=>levels.map((level,i)=>{
+ const pending=w.id==='sharegpt'&&mode==='qps'&&i===5;
+ const ttft=w.delay*[1,1.1,1.3,1.7,2.7,4.6][i],tpot=12+i*2.5+(w.id==='long'?8:0),e2e=ttft+(w.output-1)*tpot;
+ const rps=mode==='concurrency'?level*.94/(e2e/1000):Math.min(level*.995,64/(e2e/1000));
+ const failed=i===5?(w.id==='long'?24:5):0,total=1000,success=total-failed,duration=success/rps;
+ const cell={mode,level,status:pending?'pending':'completed',stale:w.id==='long'&&mode==='concurrency'&&i===4,time:null,
+  total:pending?null:total,success:pending?null:success,failed:pending?null:failed,duration:pending?null:duration,metrics:{}};
+ cell.time=pending?null:'09-29 '+String(9+wi).padStart(2,'0')+':'+String(i*8).padStart(2,'0');
+ cell.metrics=pending?{}:{rps,actual:rps*e2e/1000,inputThroughput:rps*w.input,outputThroughput:rps*w.output,successRate:success/total*100,ttft:sampleDistribution(ttft),tpot:sampleDistribution(tpot),e2e:sampleDistribution(e2e)};
+ cell.tokens=pending?null:{input:w.id==='sharegpt'?sampleDistribution(w.input):Object.fromEntries(PERCENTILES.map(p=>[p,w.input])),output:w.id==='sharegpt'?sampleDistribution(w.output):Object.fromEntries(PERCENTILES.map(p=>[p,w.output]))};
+ // Deliberately missing one statistic to demonstrate honest gaps.
+ if(w.id==='long'&&mode==='concurrency'&&i===2)cell.metrics.tpot.P70=null;
+ return cell;
+}))}));
+const $=id=>document.getElementById(id);
+let mode='concurrency';
+const hiddenSeries=new Map();
+const CHART_METRICS=['outputThroughput','e2e','ttft','tpot'].map(key=>METRICS.find(m=>m.key===key));
+const viewState=new Map();
+function stateFor(w){if(!viewState.has(w.id))viewState.set(w.id,{view:"charts",latency:"ttft",target:null});return viewState.get(w.id);}
+function fmt(n,digits=1){return n==null||!Number.isFinite(n)?'—':n.toLocaleString('en-US',{minimumFractionDigits:digits,maximumFractionDigits:digits});}
+function levelLabel(){return mode==='qps'?'提供 QPS':'并发';}
+function cellsOf(w){return w.cells.filter(c=>c.mode===mode).sort((a,b)=>a.level-b.level);}
+function value(cell,metric,series){return metric.distribution?cell.metrics[metric.key]?.[series]??null:cell.metrics[metric.key]??null;}
+function seriesFor(metric){return metric.distribution?PERCENTILES:['value'];}
+function cardId(w,metric){return w.id+'-'+metric.key;}
+function isVisible(id,series){return !hiddenSeries.get(mode+':'+id)?.has(series);}
+function short(n){return n>=1000?fmt(n/1000,1)+'k':fmt(n,n<10?1:0);}
+function metricCard(w,metric,cells){
+ const id=cardId(w,metric),series=seriesFor(metric);
+ return '<article class="metric" id="'+id+'"><div class="metric-head"><h4>'+metric.title+'</h4><div><span class="unit">'+metric.unit+'</span><button class="data-link" data-target="'+metric.key+'" aria-label="查看'+metric.title+'数据表">查看数据 ↗</button></div></div><div class="chart"></div><div class="legend">'+series.map((s,i)=>'<button data-series="'+s+'" aria-pressed="'+isVisible(id,s)+'" aria-label="'+metric.title+'：'+(s==='value'?'测量值':s)+'"><span class="dot" style="background:'+(metric.distribution?COLORS[i]:'var(--accent)')+'"></span>'+(s==='value'?'测量值':s)+'</button>').join('')+'</div><div class="metric-foot">'+metric.note+'</div></article>';
+}
+function tokenTable(w,cells){
+ return '<section class="data-section latency-card" id="data-tokens-'+w.id+'"><div class="data-head"><h3>Token 用量</h3><span class="unit">输入 / 输出 · tokens</span></div><div class="scroll"><table><thead><tr><th>'+levelLabel()+'</th>'+PERCENTILES.map(p=>'<th>'+p+'</th>').join('')+'</tr></thead><tbody>'+cells.map(c=>'<tr><td>'+c.level+'</td>'+PERCENTILES.map(p=>{const input=c.tokens?.input?.[p],output=c.tokens?.output?.[p];return '<td>'+(input==null&&output==null?'—':fmt(input,0)+'/'+fmt(output,0))+'</td>';}).join('')+'</tr>').join('')+'</tbody></table></div><div class="table-note">每格以 Input tokens / Output tokens 展示</div></section>';
+}
+function dataTables(w,cells){
+ const state=stateFor(w),scalars=['actual','successRate','rps','inputThroughput','outputThroughput'].map(key=>METRICS.find(m=>m.key===key));
+ return '<section class="data-section workload-overview" id="data-scalar-'+w.id+'" tabindex="-1"><div class="data-head"><h3>运行概览</h3><span class="unit">按档位汇总</span></div><div class="scroll"><table><thead><tr><th>'+levelLabel()+'</th>'+scalars.map(m=>'<th class="'+(state.target===m.key?'target-column':'')+'">'+m.title+(m.unit==='req/s'||m.unit==='tok/s'?' <span class="unit">'+m.unit+'</span>':'')+'</th>').join('')+'</tr></thead><tbody>'+cells.map(c=>'<tr><td>'+c.level+'</td>'+scalars.map(m=>'<td class="'+(state.target===m.key?'target-column':'')+'">'+fmt(value(c,m,'value'),m.digits)+(m.key==='successRate'&&value(c,m,'value')!=null?'%':'')+'</td>').join('')+'</tr>').join('')+'</tbody></table></div><div class="table-note">实际并发为时间平均在途请求数；吞吐量为正式压测阶段的成功请求或 token 总量除以总耗时</div></section>'+
+ '<div class="latency-tables"><div class="section-head"><h3>延迟与 Token</h3><span class="unit">按成功请求统计</span></div><div class="metric-grid">'+tokenTable(w,cells)+['e2e','ttft','tpot'].map(key=>{
+ const m=METRICS.find(m=>m.key===key);
+ return '<section class="data-section latency-card" id="data-'+key+'-'+w.id+'" tabindex="-1"><div class="data-head"><h3>'+key.toUpperCase()+'</h3><span class="unit">ms</span></div><div class="scroll"><table><thead><tr><th>'+levelLabel()+'</th>'+PERCENTILES.map(p=>'<th>'+p+'</th>').join('')+'</tr></thead><tbody>'+cells.map(c=>'<tr><td>'+c.level+'</td>'+PERCENTILES.map(p=>'<td>'+fmt(value(c,m,p),1)+'</td>').join('')+'</tr>').join('')+'</tbody></table></div><div class="table-note">每个成功请求 · 按档位统计</div></section>';
+ }).join('')+'</div></div>';
+}
+function updateView(w,target){
+ const state=stateFor(w),section=$('workload-'+w.id);
+ section.querySelector('[data-panel="charts"]').hidden=state.view!=='charts';
+ section.querySelector('[data-panel="tables"]').hidden=state.view!=='tables';
+ section.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.view===state.view)));
+ $('tooltip').hidden=true;
+ if(state.view==='tables'){
+  section.querySelector('[data-panel="tables"]').innerHTML=dataTables(w,cellsOf(w));
+ }
+ if(target){const table=$('data-'+(METRICS.find(m=>m.key===target).distribution?target:'scalar')+'-'+w.id);table.focus({preventScroll:true});table.scrollIntoView({block:'start',behavior:'instant'});}
+}
+function render(){
+ $('tooltip').hidden=true;document.body.dataset.mode=mode;
+ $('report').setAttribute('aria-labelledby','tab-'+mode);
+ $('report').innerHTML=REPORT.map((w,index)=>{
+  const cells=cellsOf(w),completed=cells.filter(c=>c.status==='completed').length,state=stateFor(w),failed=cells.filter(c=>c.failed>0).length,pending=cells.filter(c=>c.status!=='completed').length,stale=cells.filter(c=>c.stale).length;
+  return '<section class="workload" id="workload-'+w.id+'" aria-labelledby="heading-'+w.id+'"><div class="workload-head"><div class="workload-title"><span class="number">'+String(index+1).padStart(2,'0')+'</span><div><h2 id="heading-'+w.id+'">'+w.name+'</h2><p>'+w.shape+'</p></div></div><div class="pills"><span class="pill mode-pill">'+(mode==='qps'?'QPS 测试':'并发测试')+'</span><span class="pill"><b>'+completed+' / '+cells.length+'</b> 项已完成</span>'+(failed?'<span class="pill attention">'+failed+' 档含失败请求</span>':'')+(pending?'<span class="pill">'+pending+' 档未执行</span>':'')+(stale?'<span class="pill attention">'+stale+' 档旧配置</span>':'')+'</div></div><div class="body"><div class="view-bar"><div class="view-switch" role="group" aria-label="'+w.name+'报告视图"><button data-view="charts" aria-pressed="'+(state.view==='charts')+'" aria-controls="charts-'+w.id+'">曲线</button><button data-view="tables" aria-pressed="'+(state.view==='tables')+'" aria-controls="tables-'+w.id+'">数据表</button></div><p>图表看趋势 · 表格查数值</p></div><div id="charts-'+w.id+'" data-panel="charts" '+(state.view==='charts'?'':'hidden')+'><div class="metric-grid">'+CHART_METRICS.map(m=>metricCard(w,m,cells)).join('')+'</div></div><div id="tables-'+w.id+'" data-panel="tables" '+(state.view==='tables'?'':'hidden')+'>'+dataTables(w,cells)+'</div></div></section>';
+ }).join('');
+ for(const w of REPORT){
+  const section=$('workload-'+w.id),state=stateFor(w);
+  section.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{state.view=b.dataset.view;state.target=null;updateView(w);});
+  section.querySelectorAll('[data-target]').forEach(b=>b.onclick=()=>{
+   const m=METRICS.find(m=>m.key===b.dataset.target);
+   state.view='tables';state.target=m.key;if(m.distribution)state.latency=m.key;updateView(w,m.key);
+  });
+  updateView(w);
+ }
+ for(const w of REPORT)for(const metric of CHART_METRICS){
+  drawChart(w,metric);
+  const id=cardId(w,metric);
+  $(id).querySelectorAll('.legend button').forEach(button=>button.addEventListener('click',()=>{
+   const key=mode+':'+id,hidden=hiddenSeries.get(key)??new Set(),series=button.dataset.series;
+   hidden.has(series)?hidden.delete(series):hidden.add(series);hiddenSeries.set(key,hidden);
+   button.setAttribute('aria-pressed',String(!hidden.has(series)));$('tooltip').hidden=true;drawChart(w,metric);
+  }));
+ }
+}
+function drawChart(w,metric){
+ const card=$(cardId(w,metric)),cells=cellsOf(w),series=seriesFor(metric).filter(s=>isVisible(card.id,s));
+ const measured=cells.flatMap(c=>series.map(s=>value(c,metric,s))).filter(v=>v!=null);
+ const max=metric.key==='successRate'?100:Math.max(1,...measured)*1.12;
+ const left=55,right=535,top=18,bottom=170;
+ // Explicit categorical axis: equal spacing makes every tested level legible.
+ const x=i=>left+i*(right-left)/Math.max(1,cells.length-1),y=n=>bottom-n/max*(bottom-top);
+ let svg='<svg viewBox="0 0 580 213" role="group" aria-label="'+w.name+' '+metric.title+' 随'+levelLabel()+'档位变化">';
+ for(let i=0;i<=4;i++){const n=max*i/4;svg+='<line class="grid" x1="'+left+'" x2="'+right+'" y1="'+y(n)+'" y2="'+y(n)+'" stroke-dasharray="3 4"/><text x="'+(left-10)+'" y="'+(y(n)+3)+'" text-anchor="end" font-size="9">'+short(n)+'</text>';}
+ cells.forEach((c,i)=>svg+='<text x="'+x(i)+'" y="187" text-anchor="middle" font-size="9">'+c.level+'</text>');
+ svg+='<text x="'+right+'" y="207" text-anchor="end" font-size="9">'+levelLabel()+'档位 · 分类轴</text>';
+ series.forEach(s=>{
+  const color=metric.distribution?COLORS[PERCENTILES.indexOf(s)]:'var(--accent)';
+  let segment=[];
+  function finish(){if(segment.length)svg+='<polyline points="'+segment.join(' ')+'" fill="none" stroke="'+color+'" stroke-width="1.8" stroke-linejoin="round"/>';segment=[];}
+  cells.forEach((c,i)=>{const n=value(c,metric,s);if(n==null){finish();return;}segment.push(x(i)+','+y(n));});finish();
+  cells.forEach((c,i)=>{const n=value(c,metric,s);if(n==null)return;svg+='<circle tabindex="0" role="img" aria-label="'+metric.title+'，'+levelLabel()+' '+c.level+'，'+(s==='value'?'测量值':s)+' '+fmt(n,metric.digits)+' '+metric.unit+'" data-index="'+i+'" data-series="'+s+'" cx="'+x(i)+'" cy="'+y(n)+'" r="3.8" fill="var(--surface)" stroke="'+color+'" stroke-width="1.7"/>';});
+ });
+ if(!measured.length)svg+='<text x="290" y="98" text-anchor="middle" font-size="12">'+(series.length?'暂无测量结果':'已隐藏全部曲线，点击图例恢复')+'</text>';
+ card.querySelector('.chart').innerHTML=svg+'</svg>';
+ card.querySelectorAll('circle').forEach(point=>{
+  const cell=cells[+point.dataset.index];
+  const show=e=>{
+   const tooltip=$('tooltip');
+   tooltip.textContent=w.name+' · '+levelLabel()+' '+cell.level+'\n'+metric.title+' ('+metric.unit+')\n'+seriesFor(metric).map(s=>(s==='value'?'测量值':s)+'  '+fmt(value(cell,metric,s),metric.digits)).join('\n')+'\n测于 '+cell.time+(cell.stale?' · 旧配置快照':'');
+   tooltip.hidden=false;
+   const rect=point.getBoundingClientRect();
+   const px=e.clientX??rect.x,py=e.clientY??rect.y;
+   tooltip.style.left=Math.max(8,Math.min(px+14,innerWidth-tooltip.offsetWidth-10))+'px';
+   tooltip.style.top=Math.max(8,Math.min(py+14,innerHeight-tooltip.offsetHeight-10))+'px';
+  };
+  const hide=()=>{$('tooltip').hidden=true;};
+  ['mouseenter','mousemove','focus','click'].forEach(event=>point.addEventListener(event,show));
+  ['mouseleave','blur'].forEach(event=>point.addEventListener(event,hide));
+ });
+}
+function activateMode(next){
+ const activeId=location.hash.startsWith('#workload-')?location.hash.slice(1):document.querySelector('#workload-nav a[aria-current]')?.hash.slice(1);
+ const current=activeId?$(activeId):null;
+ const offset=current?24:null;
+ const expanded=[...document.querySelectorAll('.workload details[open]')].map(d=>({id:d.closest('.workload').id,kind:d.className}));
+ mode=next;
+ document.querySelectorAll('[data-mode][role="tab"]').forEach(tab=>{const active=tab.dataset.mode===mode;tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1;});
+ render();
+ expanded.forEach(d=>$(d.id)?.querySelector('details.'+d.kind)?.setAttribute('open',''));
+ if(activeId&&offset!=null){const restore=()=>{const target=$(activeId);window.scrollTo({top:window.scrollY+target.getBoundingClientRect().top-offset,behavior:'instant'});highlightSection(activeId);};restore();requestAnimationFrame(restore);}
+}
+document.querySelectorAll('[role="tab"]').forEach(tab=>{
+ tab.addEventListener('click',()=>activateMode(tab.dataset.mode));
+ tab.addEventListener('keydown',event=>{
+  if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
+  event.preventDefault();
+  const next=event.key==='Home'?'concurrency':event.key==='End'?'qps':mode==='qps'?'concurrency':'qps';
+  activateMode(next);$('tab-'+next).focus();
+ });
+});
+document.querySelector('#workload-nav nav p').textContent='Workload · '+REPORT.length;
+// Sidebar markup is generated from the same SidebarNav component used by app Nav.
+const sidebarLinks=[...document.querySelectorAll('#workload-nav a')];
+function highlightSection(id){sidebarLinks.forEach(a=>{const active=a.hash==='#'+id;a.toggleAttribute('data-active',active);if(active)a.setAttribute('aria-current','location');else a.removeAttribute('aria-current');});}
+sidebarLinks.forEach(a=>a.addEventListener('click',event=>{event.preventDefault();const id=a.hash.slice(1);$(id).scrollIntoView({block:'start',behavior:'instant'});highlightSection(id);history.replaceState(null,'',a.hash);}));
+function trackSection(){const sections=[...document.querySelectorAll('.workload')];const current=sections.filter(s=>s.getBoundingClientRect().top<=60).at(-1)||sections[0];if(current)highlightSection(current.id);}
+window.addEventListener('scroll',trackSection,{passive:true});
+$('print').addEventListener('click',()=>window.print());
+$('export').addEventListener('click',()=>{
+ const headers=['数据性质','Workload','模式','档位','状态','旧配置','执行时间','总请求','成功','失败','耗时(s)',...METRICS.flatMap(m=>seriesFor(m).map(s=>m.title+' '+(s==='value'?'':s)+' ('+m.unit+')')),...PERCENTILES.flatMap(p=>['Input tokens '+p,'Output tokens '+p])];
+ const rows=REPORT.flatMap(w=>w.cells.map(c=>['示例数据',w.name,c.mode,c.level,c.status,c.stale,c.time,c.total,c.success,c.failed,c.duration,...METRICS.flatMap(m=>seriesFor(m).map(s=>value(c,m,s))),...PERCENTILES.flatMap(p=>[c.tokens?.input?.[p],c.tokens?.output?.[p]])]));
+ const csv='\ufeff'+[headers,...rows].map(row=>row.map(v=>'"'+String(v??'').replaceAll('"','""')+'"').join(',')).join('\r\n');
+ const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'})),a=document.createElement('a');
+ a.href=url;a.download='deployment-report-all-workloads.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+});
+document.addEventListener('keydown',e=>{if(e.key==='Escape')$('tooltip').hidden=true;});
+window.addEventListener('scroll',()=>$('tooltip').hidden=true,true);
+render();trackSection();
+</script>
+</body>
+</html>

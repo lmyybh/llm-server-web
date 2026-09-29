@@ -586,7 +586,9 @@ test("a QPS report distinguishes offered rate from achieved throughput", async (
   const dialog = await screen.findByRole("dialog", { name: "synthetic-1024-128 · 压测报告" });
   await userEvent.click(within(dialog).getByRole("tab", { name: "QPS 测试" }));
   const panel = within(dialog).getByRole("tabpanel", { name: "QPS 测试" });
-  expect(within(panel).getByText("档位为发送端提供的 QPS")).toBeInTheDocument();
+  expect(within(panel).getByRole("heading", { name: "输出吞吐" })).toBeVisible();
+  await userEvent.click(within(panel).getByRole("button", { name: "数据表" }));
+  expect(within(panel).getByRole("heading", { name: "Token 用量" })).toBeVisible();
   const overview = within(panel).getAllByRole("table")[0];
   expect(within(overview).getByRole("columnheader", { name: "QPS" })).toBeInTheDocument();
   expect(within(overview).getByRole("columnheader", { name: /请求吞吐/ })).toBeInTheDocument();

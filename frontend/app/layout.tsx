@@ -28,8 +28,8 @@ export default function RootLayout({
   return (
     <html lang="zh-CN">
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
-        <div className="flex h-[100dvh] flex-col overflow-hidden text-slate-900">
-          <header className="z-30 flex h-[68px] shrink-0 items-center justify-between border-b border-slate-200/80 bg-white/90 px-5 backdrop-blur-xl sm:px-8">
+        <div className="app-shell flex h-[100dvh] flex-col overflow-hidden text-slate-900">
+          <header className="app-header z-30 flex h-[68px] shrink-0 items-center justify-between border-b border-slate-200/80 bg-white/90 px-5 backdrop-blur-xl sm:px-8">
             <Link href="/" className="group flex items-center gap-3 text-sm font-semibold tracking-tight text-slate-900">
               <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 text-white shadow-md shadow-blue-600/20" aria-hidden>
                 <span className="text-base">✳</span>
@@ -41,11 +41,11 @@ export default function RootLayout({
               推理服务工作台
             </div>
           </header>
-          <div className="flex min-h-0 flex-1 overflow-hidden">
-            <aside className="w-56 shrink-0 border-r border-slate-200/80 bg-white/75 px-3 py-6 backdrop-blur-sm max-[720px]:w-16 max-[720px]:px-2">
+          <div className="app-workspace flex min-h-0 flex-1 overflow-hidden">
+            <aside className="app-sidebar w-56 shrink-0 border-r border-slate-200/80 bg-white/75 px-3 py-6 backdrop-blur-sm max-[720px]:w-16 max-[720px]:px-2">
               <Nav />
             </aside>
-            <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-8 py-9 lg:px-12">
+            <main className="app-content min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-8 py-9 lg:px-12">
               {children}
             </main>
           </div>

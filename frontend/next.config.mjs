@@ -1,4 +1,5 @@
-/** @type {import('next').NextConfig} */
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants.js";
+
 const backendUrl = process.env.BACKEND_URL || "http://127.0.0.1:43210";
 
 function normalizeGatewayPrefix(value) {
@@ -25,4 +26,8 @@ const nextConfig = {
   },
 };
 
-export default nextConfig;
+// Development recompilation must not overwrite a production build or running preview.
+export default (phase) => ({
+  ...nextConfig,
+  distDir: phase === PHASE_DEVELOPMENT_SERVER ? ".next-dev" : ".next",
+});

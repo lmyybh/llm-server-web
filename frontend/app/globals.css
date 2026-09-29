@@ -203,3 +203,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 @media (max-width: 720px) {
   main { padding: 1.25rem !important; }
 }
+
+@media print {
+  html:has(.deployment-report), body:has(.deployment-report),
+  body:has(.deployment-report) .app-shell,
+  body:has(.deployment-report) .app-workspace,
+  body:has(.deployment-report) .app-content,
+  .deployment-report, .deployment-report-body, .deployment-report-scroll {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+  body:has(.deployment-report) .app-header,
+  body:has(.deployment-report) .app-sidebar,
+  .deployment-report .report-no-print { display: none !important; }
+  body:has(.deployment-report) .app-content { padding: 0 !important; }
+  .deployment-report .report-chart,
+  .deployment-report table { break-inside: avoid; }
+  .deployment-report [hidden] { display: none !important; }
+}

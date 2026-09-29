@@ -7,15 +7,14 @@ import Link from "../../components/Link";
 import {
   CellStatusDot,
   MODE_LABELS,
-  format,
   relativeTime,
-  workloadShape,
 } from "../../components/cell";
 import { CellReport } from "../../components/cell-report";
 import { CellLadderForm } from "../../components/cell-ladder-form";
 import { WorkloadCardFrame } from "../../components/workload-card-frame";
 import { AddWorkloadForm } from "../../components/add-workload-form";
 import { ADD_PANEL_TITLES, WorkloadModePanel } from "../../components/workload-mode-panel";
+import { mergeGroups, type WorkloadGroup } from "../../components/workload-groups";
 import { WorkloadReport } from "../../components/workload-report";
 import { Breadcrumb, Button, Empty, ErrorBanner, Field, IconButton, Modal, SelectInput, TextInput } from "../../components/ui";
 import { EllipsisIcon, PlayIcon, ReportIcon, RotateCcwIcon, StopIcon, TrashIcon } from "../../components/icons";
@@ -120,7 +119,10 @@ export default function DeploymentPage() {
             </p>
           ) : null}
         </div>
-        <Button disabled={!deployment} onClick={() => setImportingSuite(true)}>导入压测组合</Button>
+        <div className="flex items-center gap-2">
+          {deployment ? <Link href={`/deployments/${deployment.id}/report`} className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100">压测报告</Link> : null}
+          <Button disabled={!deployment} onClick={() => setImportingSuite(true)}>导入压测组合</Button>
+        </div>
       </div>
 
       <ErrorBanner message={error} />
@@ -336,62 +338,6 @@ function RunSummary({ cells }: { cells: Cell[] }) {
       <span className="tabular-nums">{pending} 项待运行</span>
     </div>
   );
-}
-
-type WorkloadGroup = {
-  workloadId: number;
-  workloadName: string;
-  shapeText: string;
-  /** When the Workload was added to *this* Deployment — cards sort oldest
-      first, newest last (bottom right of the grid). */
-  addedAt: string;
-  cells: Cell[];
-};
-
-/**
- * Cards come from two sources: Workloads added to the Deployment (possibly
- * with no Cells yet) and the Cells themselves. The union is what renders.
- */
-function mergeGroups(cells: Cell[], attached: Workload[]): WorkloadGroup[] {
-  const groups = new Map<number, WorkloadGroup>();
-  for (const workload of attached) {
-    groups.set(workload.id, {
-      workloadId: workload.id,
-      workloadName: workload.name,
-      shapeText: workloadShape(workload),
-      addedAt: workload.added_at ?? workload.created_at,
-      cells: [],
-    });
-  }
-  for (const cell of cells) {
-    let group = groups.get(cell.workload_id);
-    if (!group) {
-      group = {
-        workloadId: cell.workload_id,
-        workloadName: cell.workload_name ?? `workload ${cell.workload_id}`,
-        shapeText: cell.workload_kind
-          ? workloadShape({
-              kind: cell.workload_kind,
-              input_tokens: cell.workload_input_tokens ?? null,
-              output_tokens: cell.workload_output_tokens ?? null,
-              dataset: cell.workload_dataset ?? null,
-            })
-          : "",
-        // Cell rows don't carry the attachment's added_at; a cell-derived
-        // group without an attachment sorts as oldest.
-        addedAt: "",
-        cells: [],
-      };
-      groups.set(cell.workload_id, group);
-    }
-    group.cells.push(cell);
-  }
-  const out = Array.from(groups.values());
-  out.sort((a, b) => a.addedAt.localeCompare(b.addedAt) || a.workloadId - b.workloadId);
-  for (const group of out) {
-    group.cells.sort((a, b) => a.mode.localeCompare(b.mode) || a.level - b.level);
-  }
-  return out;
 }
 
 /**
